@@ -68,16 +68,18 @@ Networks stay independent: modes, ops and bans are never synced between them. In
 
 | Command | What it does |
 |---|---|
-| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*@$host` by default) or the mask, and kicks the matching users |
-| `tban [--force] <network> <nick\|mask> [<duration>] [<reason>]` | Like `ban`, but lifted after the duration (`30m`, `2h`, `1d`, `1h30m`...; `moderation.tbanDuration`, 1h, by default) and never set again |
+| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*@$host` by default) or the mask on that network, and kicks the matching users |
+| `ban --global [--force] <mask> [<reason>]` | Bans the mask on every network of the relay (see below) |
+| `tban [--global] [--force] ... [<duration>] [<reason>]` | Like `ban`, but lifted after the duration (`30m`, `2h`, `1d`, `1h30m`...; `moderation.tbanDuration`, 1h, by default) and never set again |
 | `kick <network> <nick> [<reason>]` | Kicks the nick |
-| `unban <id>` or `unban <network> <nick\|mask>` | Removes a ban and its +b |
+| `unban <id>`, `unban <network> <nick\|mask>` or `unban --global <mask>` | Removes a ban and its +b |
 | `bans [<network>]` | Lists the relay's active bans |
 | `baninfo <id\|mask>` | Shows a ban's details, including removed ones |
 
 For example, from `#chat` on Libera: `!ban oftc spammer advertising`.
 
-- `<network>` is the network's name in Limnoria. For masks, `*` bans on every network of the relay.
+- `<network>` is the network's name in Limnoria. Bans are per network: a nick ban uses that user's host on that network, and cloaks or vhosts don't match anywhere else.
+- **Global bans** (`--global`) are for patterns that are the same on every network: nicks and idents, which users choose themselves (e.g. `ban --global spambot*!*@*` or `ban --global *!*spam@*` against a bot wave). A global mask must have `*` as its host part; host bans always name their network.
 - **Permanent bans** (`ban`): the +b is removed after an hour (`moderation.liftAfter`) to keep the channel's ban list short, but the ban stays in Interlink. Whenever a matching user joins, changes nick or changes host, the +b is set again and they are kicked with the original reason, until the ban is removed with `unban`.
 - **If a network's op removes one of these bans** with `-b`, Interlink respects it: it doesn't set it back right away. For a permanent ban, that op is told that the ban is still on the bot and how to delete it (`unban <id>`); it's set again when a matching user joins. A `tban` removed by hand is closed.
 - **Too broad**: a ban that would match more than `moderation.maxMatches` users (1 by default) in the target channel is refused, unless `--force` is given. A ban that would match a channel operator is always refused.

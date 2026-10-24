@@ -957,11 +957,16 @@ class Interlink(callbacks.Plugin):
 
         is_mask = '!' in target or '@' in target or '*' in target
         if not is_mask and network == '*':
-            raise ModerationError(_('Give a network to ban a nick; "*" (all networks) only works with masks.'))
+            raise ModerationError(_('--global only works with masks; to ban a nick, give its network.'))
 
         if is_mask:
             if not ircutils.isUserHostmask(target):
                 raise ModerationError(_('%s is not a valid nick!user@host mask.') % target)
+            if network == '*' and ircutils.splitHostmask(target)[2] != '*':
+                # Hosts (cloaks, vhosts) differ between networks; nicks and idents don't.
+                raise ModerationError(_("%s only matches one network's hosts; give the network instead "
+                                        "of --global (global bans match on nick or ident, e.g. "
+                                        "spambot*!*@*).") % target)
             mask = target
             nick = None
         else:
@@ -1020,29 +1025,47 @@ class Interlink(callbacks.Plugin):
         length = (_(' for %s') % self._formatDuration(duration)) if duration else ''
         self._announce(relays, _('%s banned %s on %s%s: %s [#%s]') % (setter, what, where, length, reason, banid))
 
-    @wrap([getopts({'force': ''}), 'something', 'something', additional('text')])
+    @staticmethod
+    def _banArgs(opts, first, rest):
+        """Splits the arguments of ban and tban into (network, target, rest of the line). With
+        --global the network is '*' and is not given."""
+        if 'global' in opts:
+            return '*', first, rest
+        if first == '*':
+            raise ModerationError(_('Use --global to ban on every network.'))
+        words = (rest or '').split(None, 1)
+        if not words:
+            raise ModerationError(_('Give a nick or mask to ban.'))
+        return first, words[0], words[1] if len(words) > 1 else None
+
+    @wrap([getopts({'force': '', 'global': ''}), 'something', additional('text')])
     @private_errors
-    def ban(self, irc, msg, args, opts, network, target, reason):
-        """[--force] <network> <nick|mask> [<reason>]
+    def ban(self, irc, msg, args, opts, first, rest):
+        """[--force] <network> <nick|mask> [<reason>] | --global [--force] <mask> [<reason>]
 
         Bans <nick> (using the moderation.banmask setting) or <mask> from the relay's channel on
-        <network>, and kicks the matching users. <network> can be * for every network of the relay
-        (masks only). The ban is permanent: its +b is removed after moderation.liftAfter, but it is
-        set again whenever a matching user joins, until it is removed with unban. Masks that would
-        match more than moderation.maxMatches users are refused unless --force is given.
-        Channel operators of a relayed channel can use this; channel operators elsewhere can't be
-        banned."""
+        <network>, and kicks the matching users. With --global, <mask> is banned on every network
+        of the relay; since hosts differ between networks, global masks must match on nick or
+        ident only (e.g. spambot*!*@*). The ban is permanent: its +b is removed after
+        moderation.liftAfter, but it is set again whenever a matching user joins, until it is
+        removed with unban. Masks that would match more than moderation.maxMatches users are
+        refused unless --force is given. Channel operators of a relayed channel can use this;
+        channel operators elsewhere can't be banned."""
         channel, relays = self._context(irc, msg)
-        self._addBan(irc, msg, relays, network, target, reason, None, 'force' in dict(opts))
+        opts = dict(opts)
+        network, target, reason = self._banArgs(opts, first, rest)
+        self._addBan(irc, msg, relays, network, target, reason, None, 'force' in opts)
 
-    @wrap([getopts({'force': ''}), 'something', 'something', additional('text')])
+    @wrap([getopts({'force': '', 'global': ''}), 'something', additional('text')])
     @private_errors
-    def tban(self, irc, msg, args, opts, network, target, text):
-        """[--force] <network> <nick|mask> [<duration>] [<reason>]
+    def tban(self, irc, msg, args, opts, first, rest):
+        """[--force] <network> <nick|mask> [<duration>] [<reason>] | --global [--force] <mask> [<duration>] [<reason>]
 
         Like ban, but the ban is lifted after <duration> (e.g. 30m, 2h, 1d; defaults to
         moderation.tbanDuration, 1h) and never set again."""
         channel, relays = self._context(irc, msg)
+        opts = dict(opts)
+        network, target, text = self._banArgs(opts, first, rest)
         words = (text or '').split(None, 1)
         duration = self._parseDuration(words[0]) if words else None
         if duration:
@@ -1050,7 +1073,7 @@ class Interlink(callbacks.Plugin):
         else:
             duration = self.registryValue('moderation.tbanDuration', channel=channel, network=irc.network)
             reason = text
-        self._addBan(irc, msg, relays, network, target, reason, duration, 'force' in dict(opts))
+        self._addBan(irc, msg, relays, network, target, reason, duration, 'force' in opts)
 
     @wrap(['something', 'nick', additional('text')])
     @private_errors
@@ -1075,17 +1098,20 @@ class Interlink(callbacks.Plugin):
         otherIrc.queueMsg(ircmsgs.kick(chan, nick, _('Kicked by %s: %s') % (setter, reason)))
         self._announce(relays, _('%s kicked %s from %s on %s: %s') % (setter, nick, chan, otherIrc.network, reason))
 
-    @wrap(['something', additional('something')])
+    @wrap([getopts({'global': ''}), 'something', additional('something')])
     @private_errors
-    def unban(self, irc, msg, args, first, second):
-        """<id> | <network> <nick|mask>
+    def unban(self, irc, msg, args, opts, first, second):
+        """<id> | <network> <nick|mask> | --global <mask>
 
-        Removes a ban set with ban or tban, given by its id (see bans) or by the network and the
-        banned nick or mask, and removes its +b."""
+        Removes a ban set with ban or tban, given by its id (see bans), by the network and the
+        banned nick or mask, or by the mask of a global ban, and removes its +b."""
         channel, relays = self._context(irc, msg)
         with self.banLock:
             candidates = [ban for ban in self._activeBans() if ban['relay'] in relays]
-            if second is None:
+            if 'global' in dict(opts):
+                found = [ban for ban in candidates if ban['network'] == '*' and
+                         ircutils.strEqual(ban['mask'], first)]
+            elif second is None:
                 found = [ban for ban in candidates if str(ban['id']) == first.lstrip('#')]
             else:
                 network = first.lower()

@@ -834,20 +834,39 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.command('unban testnet2 dave')
         self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', '*!*@dave.example'))
 
-    def testMaskBanOnAllNetworks(self):
-        self.addUser(self.irc1, self.chan1, 'evil1', 'evil1!~x@evil.example')
-        self.addUser(self.irc2, self.chan2, 'evil2', 'evil2!~y@evil.example')
-        self.command('ban * *!*@evil.example')
+    def testGlobalBan(self):
+        self.addUser(self.irc1, self.chan1, 'spambot1', 'spambot1!~x@host.one')
+        self.addUser(self.irc2, self.chan2, 'spambot2', 'spambot2!~y@host.two')
+        self.command('ban --global spambot*!*@*')
         out1 = self.drain(self.irc1)
         out2 = self.drain(self.irc2)
-        for out, chan, nick in ((out1, self.chan1name, 'evil1'), (out2, self.chan2name, 'evil2')):
-            self.assertTrue(self.find(out, 'MODE', chan, '+b', '*!*@evil.example'), out)
+        for out, chan, nick in ((out1, self.chan1name, 'spambot1'), (out2, self.chan2name, 'spambot2')):
+            self.assertTrue(self.find(out, 'MODE', chan, '+b', 'spambot*!*@*'), out)
             self.assertTrue(self.find(out, 'KICK', chan, nick), out)
             self.assertTrue([m for m in out if m.command == 'WHO' and m.args[0] == chan], out)
         self.assertTrue(any('on all networks' in m.args[1] for m in out1 if m.command == 'PRIVMSG'), out1)
-        # A nick needs a network
-        self.command('ban * bob')
+        # Enforced on every network
+        self.irc1.feedMsg(ircmsgs.join(self.chan1name, prefix='spambot3!~z@elsewhere'))
+        self.assertTrue(self.find(self.drain(self.irc1), 'KICK', self.chan1name, 'spambot3'))
+        self.command('unban --global spambot*!*@*')
+        self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', 'spambot*!*@*'))
+
+    def testGlobalBanNeedsHostIndependentMask(self):
+        self.command('ban --global *!*@evil.example')
+        out1 = self.drain(self.irc1)
+        self.assertTrue(any("only matches one network's hosts" in n for n in self.notices(out1, 'alice')), out1)
+        self.command('ban --global bob')
         self.assertTrue(any('only works with masks' in n for n in self.notices(self.drain(self.irc1), 'alice')))
+        self.command('ban * spambot*!*@*')
+        self.assertTrue(any('Use --global' in n for n in self.notices(self.drain(self.irc1), 'alice')))
+        self.assertFalse(self.find(self.drain(self.irc2), 'MODE'))
+
+    def testGlobalTban(self):
+        self.command('tban --global *!*spam@* 2h bot wave')
+        self.drain(self.irc2)
+        ban = self.plugin.bandb['bans']['1']
+        self.assertEqual((ban['network'], ban['mask'], ban['reason']), ('*', '*!*spam@*', 'bot wave'))
+        self.assertAlmostEqual(ban['expires'] - ban['time'], 7200, delta=2)
 
     def testNickChangeIntoBan(self):
         self.command('ban testnet2 nastynick!*@*')
