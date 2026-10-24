@@ -175,6 +175,38 @@ class InterlinkTestCase(InterlinkTwoNetworks):
         self.assertEqual(self.chan2name, output.args[0])
         self.assertEqual('\x02[testnet1]\x02 <abc> hello world', output.args[1])
 
+    def testLongLinesAreSplit(self):
+        # https://github.com/jlu5/Limnoria-RelayNext/issues/5
+        words = ['word%03d' % n for n in range(150)]  # about 1200 bytes
+        self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, ' '.join(words), prefix='longtalker!~lt@talk.example'))
+        lines = []
+        while True:
+            output = self.getCommandResponse(self.irc2)
+            if output is None:
+                break
+            lines.append(output.args[1])
+        self.assertGreater(len(lines), 1, lines)
+        nick, ident, host = ircutils.splitHostmask(self.irc2.prefix)
+        prefix = '%s!%s@%s' % (self.irc2.nick, ident, 'x' * 64)  # the host the bot assumes for itself
+        for line in lines:
+            self.assertTrue(line.startswith('\x02[testnet1]\x02 <longtalker> '), line)
+            raw = ':%s PRIVMSG %s :%s\r\n' % (prefix, self.chan2name, line)
+            self.assertLessEqual(len(raw.encode('utf-8')), 512)
+        rebuilt = ' '.join(line[len('\x02[testnet1]\x02 <longtalker> '):] for line in lines)
+        self.assertEqual(rebuilt, ' '.join(words))
+
+    def testLongMultibyteWordIsSplit(self):
+        word = '\u00e9' * 400  # 800 bytes with no spaces
+        self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, word, prefix='longtalker!~lt@talk.example'))
+        lines = []
+        while True:
+            output = self.getCommandResponse(self.irc2)
+            if output is None:
+                break
+            lines.append(output.args[1])
+        self.assertGreater(len(lines), 1, lines)
+        self.assertEqual(''.join(l[len('\x02[testnet1]\x02 <longtalker> '):] for l in lines), word)
+
     def testPrivmsgAction(self):
         msg = ircmsgs.privmsg(self.chan2name, "\x01ACTION waves hello\x01", prefix='jlu5!~jlu5@user/jlu5')
         self.irc2.feedMsg(msg)  # irc2 is source

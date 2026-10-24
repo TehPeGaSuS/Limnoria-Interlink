@@ -383,12 +383,55 @@ class Interlink(callbacks.Plugin):
                             self.log.debug("Interlink: message to %s@%s dropped, we are not in that "
                                            "channel!", target, net)
                         else:
-                            out_msg = ircmsgs.privmsg(target, out_s)
+                            for line in self._splitLine(otherIrc, target, out_s):
+                                out_msg = ircmsgs.privmsg(target, line)
 
-                            # Tag the message as relayed so we (and other relayers) don't
-                            # try to relay it again.
-                            out_msg.tag('relayedMsg')
-                            otherIrc.queueMsg(out_msg)
+                                # Tag the message as relayed so we (and other relayers) don't
+                                # try to relay it again.
+                                out_msg.tag('relayedMsg')
+                                otherIrc.queueMsg(out_msg)
+
+    # The part of a relayed line repeated on each piece when it is split: "[net] <nick> ",
+    # "[net] * nick " or just "[net] ".
+    _linePrefix = re.compile(r'^(\x02\[[^\]]*\]\x02 (?:<[^>]*> |\* \S+ )?)')
+
+    def _splitLine(self, irc, target, text):
+        """Splits a relayed line into pieces that fit in one IRC message (512 bytes, including
+        the ":nick!user@host PRIVMSG <target> :" that servers add), at spaces where possible.
+        Each piece repeats the network and sender."""
+        _nick, ident, host = ircutils.splitHostmask(irc.prefix)
+        nick = irc.nick  # The prefix's nick can lag behind a nick change
+        if host == 'unset.domain':  # We haven't seen our own host yet; assume a long one.
+            host = 'x' * 64
+        overhead = len((':%s!%s@%s PRIVMSG %s :\r\n' % (nick, ident, host, target)).encode('utf-8'))
+        limit = 512 - overhead
+        if len(text.encode('utf-8')) <= limit:
+            return [text]
+
+        match = self._linePrefix.match(text)
+        head = match.group(1) if match else ''
+        body = text[len(head):]
+        room = max(limit - len(head.encode('utf-8')), 50)
+        pieces = []
+        current = ''
+        for word in body.split(' '):
+            candidate = word if not current else current + ' ' + word
+            if len(candidate.encode('utf-8')) <= room:
+                current = candidate
+                continue
+            if current:
+                pieces.append(current)
+            # A single word longer than a line is cut by characters.
+            while len(word.encode('utf-8')) > room:
+                cut = len(word)
+                while len(word[:cut].encode('utf-8')) > room:
+                    cut -= 1
+                pieces.append(word[:cut])
+                word = word[cut:]
+            current = word
+        if current:
+            pieces.append(current)
+        return [head + piece for piece in pieces]
 
     def doPrivmsg(self, irc, msg):
         if msg.channel and self._isModerationCommand(irc, msg):
