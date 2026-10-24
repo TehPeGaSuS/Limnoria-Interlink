@@ -32,7 +32,7 @@ import supybot.conf as conf
 import supybot.registry as registry
 try:
     from supybot.i18n import PluginInternationalization
-    _ = PluginInternationalization('RelayNext')
+    _ = PluginInternationalization('Interlink')
 except:
     # Placeholder that allows to run the plugin on a bot
     # without the i18n module
@@ -45,57 +45,57 @@ def configure(advanced):
     # user or not.  You should effect your configuration by manipulating the
     # registry as appropriate.
     from supybot.questions import expect, anything, something, yn
-    conf.registerPlugin('RelayNext', True)
+    conf.registerPlugin('Interlink', True)
 
 
-RelayNext = conf.registerPlugin('RelayNext')
+Interlink = conf.registerPlugin('Interlink')
 
-conf.registerChannelValue(RelayNext, 'color',
+conf.registerChannelValue(Interlink, 'color',
     registry.Boolean(True, _("""Determines whether the bot will color networks and nicks when
     relaying messages.""")))
-conf.registerChannelValue(RelayNext, 'hostmasks',
+conf.registerChannelValue(Interlink, 'hostmasks',
     registry.Boolean(True, _("""Determines whether the bot will relay the ident@host of people
     that join or part a channel.""")))
-conf.registerChannelValue(RelayNext, 'noHighlight',
+conf.registerChannelValue(Interlink, 'noHighlight',
     registry.Boolean(False, _("""Determines whether the bot should prefix nicks with zero-width
     (ZWS) to prevent them from being highlighted / mentioned by the relayer.""")))
-conf.registerChannelValue(RelayNext, 'showPrefixes',
+conf.registerChannelValue(Interlink, 'showPrefixes',
     registry.Boolean(False, _("""Determines whether the bot should show status prefixes
     (@, %, +) when relaying.""")))
-conf.registerChannelValue(RelayNext, 'ignoreRegexp',
+conf.registerChannelValue(Interlink, 'ignoreRegexp',
     registry.Regexp(None, _("""If configured, text, part, and quit messages matching this regexp
                             will not be relayed. This may be useful for blocking spam.""")))
 
-conf.registerGroup(RelayNext, 'antiflood')
-conf.registerChannelValue(RelayNext.antiflood, 'enable',
+conf.registerGroup(Interlink, 'antiflood')
+conf.registerChannelValue(Interlink.antiflood, 'enable',
     registry.Boolean(False, _("""Determines whether flood prevention should be enabled
     for the given channel.""")))
-conf.registerChannelValue(RelayNext.antiflood, 'seconds',
+conf.registerChannelValue(Interlink.antiflood, 'seconds',
     registry.PositiveInteger(20, _("""Determines how many seconds messages should be queued
         for flood protection.""")))
-conf.registerChannelValue(RelayNext.antiflood, 'maximum',
+conf.registerChannelValue(Interlink.antiflood, 'maximum',
     registry.PositiveInteger(15, _("""Determines the maximum amount of incoming messages
         the bot will allow from a relay channel before flood protection is triggered.""")))
-conf.registerChannelValue(RelayNext.antiflood.maximum, 'nonPrivmsgs',
+conf.registerChannelValue(Interlink.antiflood.maximum, 'nonPrivmsgs',
     registry.PositiveInteger(10, _("""Determines the maximum amount of incoming non-PRIVMSG events
         the bot will allow from a relay channel before flood protection is triggered.""")))
-conf.registerChannelValue(RelayNext.antiflood, 'timeout',
+conf.registerChannelValue(Interlink.antiflood, 'timeout',
     registry.PositiveInteger(60, _("""Determines the amount of time in seconds the bot should
         block messages when flood protection is triggered.""")))
 
-conf.registerGroup(RelayNext, 'events')
+conf.registerGroup(Interlink, 'events')
 
 _events = {'quit': True, 'join': True, 'part': True,
            'nick': True, 'mode': True, 'kick': True,
            'topic': False}
 for ev in _events:
-    conf.registerChannelValue(RelayNext.events, 'relay%ss' % ev,
+    conf.registerChannelValue(Interlink.events, 'relay%ss' % ev,
         registry.Boolean(_events[ev], """Determines whether the bot should relay %ss.""" % ev))
-conf.registerChannelValue(RelayNext.events, 'userIgnored',
+conf.registerChannelValue(Interlink.events, 'userIgnored',
     registry.SpaceSeparatedListOfStrings(['PRIVMSG', 'MODE'], ("""Determines what events
         the relay should ignore from ignored users. Ignores are added using
         Limnoria's global ignore system.""")))
-conf.registerChannelValue(RelayNext.events, 'relaySelfMessages',
+conf.registerChannelValue(Interlink.events, 'relaySelfMessages',
     registry.Boolean(True, ("""Determines whether the bot should relay its own messages.
         You may wish to disable this if you are running plugins that announce to the same channel
         on multiple networks (e.g. RSS).""")))

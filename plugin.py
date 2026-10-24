@@ -47,39 +47,43 @@ import supybot.callbacks as callbacks
 from supybot.utils.structures import TimeoutQueue
 try:
     from supybot.i18n import PluginInternationalization
-    _ = PluginInternationalization('RelayNext')
+    _ = PluginInternationalization('Interlink')
 except ImportError:
     # Placeholder that allows to run the plugin on a bot
     # without the i18n module
     _ = lambda x: x
 
 
-filename = conf.supybot.directories.data.dirize("RelayNext.db")
+filename = conf.supybot.directories.data.dirize("Interlink.db")
+# Interlink is a fork of RelayNext; its relays are picked up if Interlink has no database yet.
+relaynext_filename = conf.supybot.directories.data.dirize("RelayNext.db")
 
-class RelayNext(callbacks.Plugin):
-    """Next generation relayer plugin."""
+class Interlink(callbacks.Plugin):
+    """Relays channels between networks, with cross-network moderation for channel ops."""
     threaded = True
     noIgnore = True
 
     ### Database handling
 
     def loadDB(self):
-        try:
-            with open(filename, 'rb') as f:
-               self.db = pickle.load(f)
-        except Exception as e:
-            self.log.debug('RelayNext: Unable to load pickled database: %s', e)
+        for path in (filename, relaynext_filename):
+            try:
+                with open(path, 'rb') as f:
+                    self.db = pickle.load(f)
+                return
+            except Exception as e:
+                self.log.debug('Interlink: Unable to load pickled database %s: %s', path, e)
 
     def exportDB(self):
         try:
             with open(filename, 'wb') as f:
                 pickle.dump(self.db, f, 2)
         except Exception as e:
-             self.log.warning('RelayNext: Unable to write pickled database: %s',
+             self.log.warning('Interlink: Unable to write pickled database: %s',
                               e)
 
     def __init__(self, irc):
-        self.__parent = super(RelayNext, self)
+        self.__parent = super(Interlink, self)
         self.__parent.__init__(irc)
 
         # This part facilitates flood protection
@@ -178,7 +182,7 @@ class RelayNext(callbacks.Plugin):
                         nick = '+' + nick
 
                 if ignoreRegexp and ignoreRegexp.search(text, re.IGNORECASE):
-                    self.log.debug("RelayNext: filtering message %r from ignoreRegexp %s", text, ignoreRegexp)
+                    self.log.debug("Interlink: filtering message %r from ignoreRegexp %s", text, ignoreRegexp)
                     return
 
                 # Check for CTCP ACTION and format those properly.
@@ -202,7 +206,7 @@ class RelayNext(callbacks.Plugin):
                     partmsg = ''
 
                 if ignoreRegexp and ignoreRegexp.search(partmsg, re.IGNORECASE):
-                    self.log.debug("RelayNext: filtering part message %r from ignoreRegexp %s", partmsg, ignoreRegexp)
+                    self.log.debug("Interlink: filtering part message %r from ignoreRegexp %s", partmsg, ignoreRegexp)
                     partmsg = ''
 
                 s = '%s%s has left %s%s' % (nick, userhost, channel, partmsg)
@@ -210,7 +214,7 @@ class RelayNext(callbacks.Plugin):
             elif msg.command == 'QUIT':
                 quitmsg = msg.args[0]
                 if ignoreRegexp and ignoreRegexp.search(quitmsg, re.IGNORECASE):
-                    self.log.debug("RelayNext: filtering quit message %r from ignoreRegexp %s", quitmsg, ignoreRegexp)
+                    self.log.debug("Interlink: filtering quit message %r from ignoreRegexp %s", quitmsg, ignoreRegexp)
                     quitmsg = ''
 
                 s = '%s has quit (%s)' % (nick, quitmsg)
@@ -286,13 +290,13 @@ class RelayNext(callbacks.Plugin):
                 announce_msg = ircmsgs.privmsg(channel, announce_text)
 
                 self.floodTriggered[(source, msg.command)] = time.time()
-                self.log.info("RelayNext (%s): %s", irc.network, announce_text)
+                self.log.info("Interlink (%s): %s", irc.network, announce_text)
                 self.relay(irc, announce_msg, channel, isAnnouncement=True)
                 return False
         return True
 
     def relay(self, irc, msg, channel, isAnnouncement=False):
-        self.log.debug("RelayNext (%s): got channel %s", irc.network, channel)
+        self.log.debug("Interlink (%s): got channel %s", irc.network, channel)
         if not channel in irc.state.channels:
             return
         channel = channel.lower()
@@ -303,7 +307,7 @@ class RelayNext(callbacks.Plugin):
             ignoredevents = map(str.upper, self.registryValue('events.userIgnored', channel=channel, network=irc.network))
             if msg.command in ignoredevents and msg.nick != irc.nick and '.' not in msg.nick and\
                     ircdb.checkIgnored(msg.prefix, channel):
-                self.log.debug("RelayNext (%s): ignoring message from %s",
+                self.log.debug("Interlink (%s): ignoring message from %s",
                                irc.network, msg.prefix)
                 return
 
@@ -314,17 +318,17 @@ class RelayNext(callbacks.Plugin):
         out_s = self._format(irc, msg, channel, isAnnouncement=isAnnouncement)
         if out_s:
             for relay in self.db.values():
-                self.log.debug("RelayNext (%s): check if %s in %s", irc.network, source, relay)
+                self.log.debug("Interlink (%s): check if %s in %s", irc.network, source, relay)
                 if source in relay:  # If our channel is in a relay
-                    self.log.debug("RelayNext: found %s to be in relay %s", source, relay)
+                    self.log.debug("Interlink: found %s to be in relay %s", source, relay)
 
                     # Remove ourselves from the target channels so we don't get duplicated messages
                     targets = list(relay)
                     targets.remove(source)
 
-                    self.log.debug("RelayNext: found targets %s for relay %s", targets, relay)
+                    self.log.debug("Interlink: found targets %s for relay %s", targets, relay)
                     if (not isAnnouncement) and not self.checkAntiFlood(irc, msg, source, channel):
-                        self.log.debug("RelayNext: antiflood blocked event %s from %s",
+                        self.log.debug("Interlink: antiflood blocked event %s from %s",
                                        msg.command, source)
                         return
 
@@ -335,14 +339,14 @@ class RelayNext(callbacks.Plugin):
                         target, net = cn.split("@")
                         otherIrc = world.getIrc(net)
                         if otherIrc is None:
-                            self.log.debug("RelayNext: message to network %r dropped, we are not "
+                            self.log.debug("Interlink: message to network %r dropped, we are not "
                                            "connected there!", net)
                             continue
 
                         target_chanobj = otherIrc.state.channels.get(target)
                         if (not target_chanobj) or otherIrc.nick not in target_chanobj.users:
                             # We're not in the target relay channel!
-                            self.log.debug("RelayNext: message to %s@%s dropped, we are not in that "
+                            self.log.debug("Interlink: message to %s@%s dropped, we are not in that "
                                            "channel!", target, net)
                         else:
                             out_msg = ircmsgs.privmsg(target, out_s)
@@ -384,7 +388,7 @@ class RelayNext(callbacks.Plugin):
                 self.relay(irc, new_msg, channel=msg.channel)
         except Exception:
             # We want to log errors, but not block the bot's output
-            log.exception("RelayNext: Caught error in outFilter:")
+            log.exception("Interlink: Caught error in outFilter:")
         finally:
             return msg
 
@@ -407,7 +411,7 @@ class RelayNext(callbacks.Plugin):
             irc.error("Unknown channel '%s'." % channel, Raise=True)
 
         if msg.nick not in c.users:
-            self.log.warning('RelayNext: %s on %s attempted to view '
+            self.log.warning('Interlink: %s on %s attempted to view '
                              'nicks of %s without being in it.', msg.nick,
                              irc.network, channel)
             irc.error(("You are not in '%s'." % channel), Raise=True)
@@ -581,7 +585,7 @@ class RelayNext(callbacks.Plugin):
         irc.replySuccess()
     clear = wrap(clear, ['admin'])
 
-Class = RelayNext
+Class = Interlink
 
 
 # vim:set shiftwidth=4 softtabstop=4 expandtab textwidth=79:

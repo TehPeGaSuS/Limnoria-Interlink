@@ -37,90 +37,90 @@ import uuid
 
 from supybot.test import *
 
-class RelayNextDBTestCase(PluginTestCase):
-    plugins = ('RelayNext',)
+class InterlinkDBTestCase(PluginTestCase):
+    plugins = ('Interlink',)
 
     def testAdd(self):
-        self.assertNotError("relaynext add test #channel1@somenet #channel2@othernet")
-        self.assertRegexp("relaynext list", "#channel1@somenet")
-        self.assertRegexp("relaynext list", "#channel2@othernet")
+        self.assertNotError("interlink add test #channel1@somenet #channel2@othernet")
+        self.assertRegexp("interlink list", "#channel1@somenet")
+        self.assertRegexp("interlink list", "#channel2@othernet")
         # Incorrect amount of arguments
-        self.assertError("relaynext add test")
-        self.assertError("relaynext add test afdasfader agkajeoig #validchannel@othernet")
+        self.assertError("interlink add test")
+        self.assertError("interlink add test afdasfader agkajeoig #validchannel@othernet")
         # needs at least 2 channels
-        self.assertError("relaynext add nonexistant-relay #channel1@somenet")
+        self.assertError("interlink add nonexistant-relay #channel1@somenet")
 
     def testSet(self):
-        self.assertNotError("relaynext set test #channel1@somenet #channel2@othernet")
-        self.assertRegexp("relaynext list", "#channel1@somenet")
-        self.assertRegexp("relaynext list", "#channel2@othernet")
-        self.assertError("relaynext set test")
-        self.assertError("relaynext set test #channel1@somenet")
+        self.assertNotError("interlink set test #channel1@somenet #channel2@othernet")
+        self.assertRegexp("interlink list", "#channel1@somenet")
+        self.assertRegexp("interlink list", "#channel2@othernet")
+        self.assertError("interlink set test")
+        self.assertError("interlink set test #channel1@somenet")
 
     def testList(self):
         # This should error if no relays are defined
-        self.assertError("relaynext list")
-        self.assertNotError("relaynext set abcd #moo@moo #test@test")
-        self.assertRegexp("relaynext list", "#moo@moo")
-        self.assertRegexp("relaynext list", "#test@test")
+        self.assertError("interlink list")
+        self.assertNotError("interlink set abcd #moo@moo #test@test")
+        self.assertRegexp("interlink list", "#moo@moo")
+        self.assertRegexp("interlink list", "#test@test")
 
     def testSetCaseInsensitive(self):
-        self.assertError("relaynext set foobar #deV@overdrive-irc #DEV@overdrive-irc")
-        self.assertError("relaynext set foobar #dev@overdrive-irc #DEV@OVERdrive-IRC")
-        self.assertError("relaynext set foobar #dev@overdrive-irc #dev@OVERdrive-IRC")
-        self.assertNotError("relaynext set abcd #moo@moo #MOO@mOO #test@test")
-        self.assertRegexp("relaynext list", "#moo@moo")
-        self.assertRegexp("relaynext list", "#test@test")
+        self.assertError("interlink set foobar #deV@overdrive-irc #DEV@overdrive-irc")
+        self.assertError("interlink set foobar #dev@overdrive-irc #DEV@OVERdrive-IRC")
+        self.assertError("interlink set foobar #dev@overdrive-irc #dev@OVERdrive-IRC")
+        self.assertNotError("interlink set abcd #moo@moo #MOO@mOO #test@test")
+        self.assertRegexp("interlink list", "#moo@moo")
+        self.assertRegexp("interlink list", "#test@test")
 
     def testAddCaseInsensitive(self):
-        self.assertError("relaynext add foobar #deV@overdrive-irc #DEV@overdrive-irc")
-        self.assertError("relaynext add foobar #dev@overdrive-irc #DEV@OVERdrive-IRC")
-        self.assertError("relaynext add foobar #dev@overdrive-irc #dev@OVERdrive-IRC")
-        self.assertNotError("relaynext add abcd #moo@moo #MOO@mOO #test@test")
-        self.assertRegexp("relaynext list", "#moo@moo")
-        self.assertRegexp("relaynext list", "#test@test")
+        self.assertError("interlink add foobar #deV@overdrive-irc #DEV@overdrive-irc")
+        self.assertError("interlink add foobar #dev@overdrive-irc #DEV@OVERdrive-IRC")
+        self.assertError("interlink add foobar #dev@overdrive-irc #dev@OVERdrive-IRC")
+        self.assertNotError("interlink add abcd #moo@moo #MOO@mOO #test@test")
+        self.assertRegexp("interlink list", "#moo@moo")
+        self.assertRegexp("interlink list", "#test@test")
 
     def testRemoveEntireRelay(self):
-        self.assertError("relaynext remove some-relay")
-        self.assertNotError("relaynext add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
+        self.assertError("interlink remove some-relay")
+        self.assertNotError("interlink add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
         # 'remove' without arguments removes an entire relay
-        self.assertNotError("relaynext remove some-relay")
+        self.assertNotError("interlink remove some-relay")
         # No relays should be defined now.
-        self.assertError("relaynext list")
+        self.assertError("interlink list")
 
     def testRemoveChannelsFromExistingRelay(self):
-        self.assertNotError("relaynext add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
+        self.assertNotError("interlink add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
         # This should give a warning (removing a channel that's not in the specified relay)
-        self.assertRegexp("relaynext remove some-relay #asfdafaergea@random",
+        self.assertRegexp("interlink remove some-relay #asfdafaergea@random",
                           'not found in the original relay: '
                           '#asfdafaergea@random')
-        self.assertNotError("relaynext remove some-relay #abcd@test123")
-        self.assertRegexp("relaynext list", "#channel1@somenet")
-        self.assertRegexp("relaynext list", "#channel2@othernet")
-        self.assertNotRegexp("relaynext list", "#abcd@test123")
+        self.assertNotError("interlink remove some-relay #abcd@test123")
+        self.assertRegexp("interlink list", "#channel1@somenet")
+        self.assertRegexp("interlink list", "#channel2@othernet")
+        self.assertNotRegexp("interlink list", "#abcd@test123")
 
     def testAutoremoveWhenLessThanTwoChannels(self):
-        self.assertNotError("relaynext add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
-        self.assertNotError("relaynext remove some-relay #abcd@test123 #channel2@othernet")
-        self.assertError("relaynext list")
+        self.assertNotError("interlink add some-relay #channel1@somenet #channel2@othernet #abcd@test123")
+        self.assertNotError("interlink remove some-relay #abcd@test123 #channel2@othernet")
+        self.assertError("interlink list")
 
     def testAddChannelsToExistingRelay(self):
-        self.assertNotError("relaynext add test #channel1@somenet #channel2@othernet")
-        self.assertNotError("relaynext add test #somewhereElse@mynet")
-        self.assertRegexp("relaynext list", "#channel1@somenet")
-        self.assertRegexp("relaynext list", "#channel2@othernet")
-        self.assertRegexp("relaynext list", "#somewhereelse@mynet")
+        self.assertNotError("interlink add test #channel1@somenet #channel2@othernet")
+        self.assertNotError("interlink add test #somewhereElse@mynet")
+        self.assertRegexp("interlink list", "#channel1@somenet")
+        self.assertRegexp("interlink list", "#channel2@othernet")
+        self.assertRegexp("interlink list", "#somewhereelse@mynet")
 
     def testClear(self):
-        self.assertNotError("relaynext set test #channel1@somenet #channel2@othernet")
-        self.assertNotError("relaynext clear")
-        self.assertError("relaynext list")
+        self.assertNotError("interlink set test #channel1@somenet #channel2@othernet")
+        self.assertNotError("interlink clear")
+        self.assertError("interlink list")
 
 
-class RelayNextTestCase(PluginTestCase):
-    plugins = ('RelayNext', 'Admin', 'Utilities')
+class InterlinkTestCase(PluginTestCase):
+    plugins = ('Interlink', 'Admin', 'Utilities')
     # Disable colours to make output checking more predictable
-    config = {'plugins.RelayNext.color': False}
+    config = {'plugins.Interlink.color': False}
     timeout = 3
 
     @staticmethod
@@ -151,7 +151,7 @@ class RelayNextTestCase(PluginTestCase):
         self.irc2.nick = 'relay-' + self.randomString(6)
         self.chan2name = '#' + uuid.uuid4().hex
         self.chan2 = self._createChannel(self.irc2, self.chan2name)
-        self.assertNotError("relaynext set testRelay %s@testnet1 %s@testnet2" % (self.chan1name, self.chan2name))
+        self.assertNotError("interlink set testRelay %s@testnet1 %s@testnet2" % (self.chan1name, self.chan2name))
 
     def getCommandResponse(self, irc):
         # Adapted from PluginTestCase._feedMsg() to account for other irc objects
@@ -209,7 +209,7 @@ class RelayNextTestCase(PluginTestCase):
         self.assertEqual('\x02[testnet1]\x02 foo (bar@baz) has left %s (foobar)' % self.chan1name, output.args[1])
 
     def testTopic(self):
-        with conf.supybot.plugins.relayNext.events.relayTopics.context(True):
+        with conf.supybot.plugins.interlink.events.relayTopics.context(True):
             msg = ircmsgs.topic(self.chan1name, 'Some topic text', prefix='user5!~test@user/test')
             self.irc1.feedMsg(msg)
             output = self.getCommandResponse(self.irc2)
@@ -263,8 +263,8 @@ class RelayNextTestCase(PluginTestCase):
 
     ### Display options
     def testToggleEvents(self):
-        with conf.supybot.plugins.relayNext.events.relayJoins.context(False):
-            with conf.supybot.plugins.relayNext.events.relayParts.context(False):
+        with conf.supybot.plugins.interlink.events.relayJoins.context(False):
+            with conf.supybot.plugins.interlink.events.relayParts.context(False):
                 self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='ChanServ!ChanServ@services.testnet.internal'))
                 self.irc2.feedMsg(ircmsgs.part(self.chan2name, prefix='ChanServ!ChanServ@services.testnet.internal'))
                 self.irc2.feedMsg(ircmsgs.privmsg(self.chan2name, 'Your channel is now registered =]', prefix='ChanServ!ChanServ@services.testnet.internal'))
@@ -273,8 +273,8 @@ class RelayNextTestCase(PluginTestCase):
         self.assertEqual('\x02[testnet2]\x02 <ChanServ> Your channel is now registered =]', output.args[1])
 
     def testRelayColorNoHostmask(self):
-        with conf.supybot.plugins.relayNext.color.context(True):
-            with conf.supybot.plugins.relayNext.hostmasks.context(False):
+        with conf.supybot.plugins.interlink.color.context(True):
+            with conf.supybot.plugins.interlink.hostmasks.context(False):
                 # Join message
                 self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='ChanServ!ChanServ@services.testnet.internal'))
                 output = self.getCommandResponse(self.irc1)
@@ -292,8 +292,8 @@ class RelayNextTestCase(PluginTestCase):
                 self.assertRegex(output.args[1], '\x03\\d{1,2}old345\\x03 is now known as \x03\\d{1,2}new123\\x03')
 
     def testBlockHighlightsSimple(self):
-        with conf.supybot.plugins.relayNext.noHighlight.context(True):
-            with conf.supybot.plugins.relayNext.hostmasks.context(False):
+        with conf.supybot.plugins.interlink.noHighlight.context(True):
+            with conf.supybot.plugins.interlink.hostmasks.context(False):
                 # Join message
                 self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='ChanServ!ChanServ@services.testnet.internal'))
                 output = self.getCommandResponse(self.irc1)
@@ -307,8 +307,8 @@ class RelayNextTestCase(PluginTestCase):
                 self.assertNotIn('<samplenick>', output.args[1])
 
     def testBlockHighlightsNick(self):
-        with conf.supybot.plugins.relayNext.noHighlight.context(True):
-            with conf.supybot.plugins.relayNext.hostmasks.context(False):
+        with conf.supybot.plugins.interlink.noHighlight.context(True):
+            with conf.supybot.plugins.interlink.hostmasks.context(False):
                 # Nick change
                 self.chan2.addUser('old345')
                 self.irc2.feedMsg(ircmsgs.nick('new123', prefix='old345!old345@Clk-12345678.lan'))
@@ -319,8 +319,8 @@ class RelayNextTestCase(PluginTestCase):
                 self.assertNotIn('new123', output.args[1])
 
     def testBlockHighlightsKick(self):
-        with conf.supybot.plugins.relayNext.noHighlight.context(True):
-            with conf.supybot.plugins.relayNext.hostmasks.context(False):
+        with conf.supybot.plugins.interlink.noHighlight.context(True):
+            with conf.supybot.plugins.interlink.hostmasks.context(False):
                 # KICK
                 self.irc2.state.nicksToHostmasks['evilbot'] = 'evilbot!bot@test.client'
                 self.chan2.addUser('evilbot')
@@ -331,15 +331,15 @@ class RelayNextTestCase(PluginTestCase):
                 self.assertIn('a\u200b', output.args[1])
 
     def testBlockHighlightsColor(self):
-        with conf.supybot.plugins.relayNext.color.context(True):
-            with conf.supybot.plugins.relayNext.noHighlight.context(True):
+        with conf.supybot.plugins.interlink.color.context(True):
+            with conf.supybot.plugins.interlink.noHighlight.context(True):
                 # PRIVMSG
                 self.irc2.feedMsg(ircmsgs.privmsg(self.chan2name, 'The quick brown fox jumps over the lazy dog', prefix='Limnoria!limnoria@bot/limnoria'))
                 output = self.getCommandResponse(self.irc1)
                 self.assertRegex(output.args[1], '<\x03\\d{1,2}L\u200bimnoria\x03>')
 
     def testShowPrefixes(self):  # currently only implemented for PRIVMSG
-        with conf.supybot.plugins.relayNext.showPrefixes.context(True):
+        with conf.supybot.plugins.interlink.showPrefixes.context(True):
             users = {"foo": "@", "bar": "%", "baz": "+"}
             for nick, status in users.items():
                 self.chan2.addUser(status+nick)
@@ -349,9 +349,9 @@ class RelayNextTestCase(PluginTestCase):
                 self.assertNotIn('<%s>' % nick, output.args[1])
 
     def testShowPrefixesColorNoHighlight(self):
-        with conf.supybot.plugins.relayNext.showPrefixes.context(True), \
-                    conf.supybot.plugins.relayNext.color.context(True), \
-                    conf.supybot.plugins.relayNext.noHighlight.context(True):
+        with conf.supybot.plugins.interlink.showPrefixes.context(True), \
+                    conf.supybot.plugins.interlink.color.context(True), \
+                    conf.supybot.plugins.interlink.noHighlight.context(True):
             users = {"foo": "@", "bar": "%", "baz": "+"}
             for nick, status in users.items():
                 self.chan2.addUser(status+nick)
@@ -368,7 +368,7 @@ class RelayNextTestCase(PluginTestCase):
         self.assertEqual('\x02[testnet1]\x02 <tester> Message from user', output.args[1])
 
     def testIgnoreRegexp(self):
-        cfgvar = conf.supybot.plugins.relayNext.ignoreRegexp
+        cfgvar = conf.supybot.plugins.interlink.ignoreRegexp
         try:
             cfgvar.set("m/xnopyt/")
             self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, "!ud xnopyt", prefix='abc!def@efg.user'))
@@ -383,15 +383,15 @@ class RelayNextTestCase(PluginTestCase):
         self.irc1.nick = 'RelayBot'
         self.chan1.addUser('RelayBot')
         self.chan1.addUser('caller')
-        with conf.supybot.plugins.relayNext.events.relaySelfMessages.context(True):
+        with conf.supybot.plugins.interlink.events.relaySelfMessages.context(True):
             cmd = "RelayBot: echo abcd"
             self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, cmd, prefix='caller!caller@abc.internal'))
             output = self.getCommandResponse(self.irc2)
             self.assertIn('<caller> ' + cmd, output.args[1])
             output = self.getCommandResponse(self.irc2)
             self.assertIn('<RelayBot> abcd', output.args[1])
-        with conf.supybot.plugins.relayNext.events.relaySelfMessages.context(False):
-            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, "RelayNext: echo xyzzy", prefix='caller!caller@abc.internal'))
+        with conf.supybot.plugins.interlink.events.relaySelfMessages.context(False):
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, "Interlink: echo xyzzy", prefix='caller!caller@abc.internal'))
             self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, "\o/", prefix='botty!mcbotface@bots.fancy.example'))
             output = self.getCommandResponse(self.irc2)
             self.assertIn('<botty> \o/', output.args[1])
@@ -400,10 +400,10 @@ class RelayNextTestCase(PluginTestCase):
     def testAntifloodSingleSource(self):
         max_messages = random.randint(4, 10)
         timeout = random.randint(10, 120)
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(timeout), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.context(max_messages), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(60):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(timeout), \
+                conf.supybot.plugins.interlink.antiflood.maximum.context(max_messages), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(60):
             prefix = 'spammer!spammer@aaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaa'
             for i in range(max_messages*2):
                 text = "This is message #%i" % i
@@ -425,10 +425,10 @@ class RelayNextTestCase(PluginTestCase):
 
     def testAntifloodMultiSource(self):
         max_messages = random.randint(5, 15)
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(30), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.context(max_messages), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(60):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(30), \
+                conf.supybot.plugins.interlink.antiflood.maximum.context(max_messages), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(60):
             for i in range(max_messages*2):
                 text = "This is message #%i" % i
                 self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, text, prefix='spam%s!foo@test.user' % i))
@@ -452,10 +452,10 @@ class RelayNextTestCase(PluginTestCase):
         # so flood protection should never trigger.
         expiry = random.randint(3, 120)
         print("Antiflood expiry set to", expiry, "seconds", file=sys.stderr)
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(30), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.context(1), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(expiry):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(30), \
+                conf.supybot.plugins.interlink.antiflood.maximum.context(1), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(expiry):
             expected_msgs = []
             for i in range(12):
                 text = "This is message #%i" % i
@@ -474,13 +474,13 @@ class RelayNextTestCase(PluginTestCase):
 
         self._createChannel(self.irc1, "#foo")
         self._createChannel(self.irc2, "#bar")
-        self.assertNotError("relaynext add otherRelay #foo@testnet1 #bar@testnet2")
+        self.assertNotError("interlink add otherRelay #foo@testnet1 #bar@testnet2")
 
         max_messages = 3
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(30), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.context(max_messages), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(42):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(30), \
+                conf.supybot.plugins.interlink.antiflood.maximum.context(max_messages), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(42):
             for i in range(max_messages*2):
                 text = "This is message #%i" % i
                 self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, text, prefix='spam%i!aaaa@test.user' % i))
@@ -504,11 +504,11 @@ class RelayNextTestCase(PluginTestCase):
     def testAntifloodJoin(self):
         # Check that antiflood counts are per command
         max_messages = random.randint(3, 8)
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(30), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.nonPrivmsgs.context(max_messages), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(60), \
-                conf.supybot.plugins.relayNext.hostmasks.context(False):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(30), \
+                conf.supybot.plugins.interlink.antiflood.maximum.nonPrivmsgs.context(max_messages), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(60), \
+                conf.supybot.plugins.interlink.hostmasks.context(False):
             for i in range(max_messages*2):
                 prefix = '%s!%s@%s.%s' % (self.randomString(), self.randomString(), self.randomString(), self.randomString())
                 self.irc1.feedMsg(ircmsgs.join(self.chan1name, prefix=prefix))
@@ -535,10 +535,10 @@ class RelayNextTestCase(PluginTestCase):
     def testAntifloodJoinPart(self):
         # Check that antiflood counts are per command (variant)
         max_messages = random.randint(3, 15)
-        with conf.supybot.plugins.relayNext.antiflood.enable.context(True), \
-                conf.supybot.plugins.relayNext.antiflood.timeout.context(30), \
-                conf.supybot.plugins.relayNext.antiflood.maximum.nonPrivmsgs.context(max_messages), \
-                conf.supybot.plugins.relayNext.antiflood.seconds.context(60):
+        with conf.supybot.plugins.interlink.antiflood.enable.context(True), \
+                conf.supybot.plugins.interlink.antiflood.timeout.context(30), \
+                conf.supybot.plugins.interlink.antiflood.maximum.nonPrivmsgs.context(max_messages), \
+                conf.supybot.plugins.interlink.antiflood.seconds.context(60):
             expected_msgs = []
 
             for i in range(int(max_messages*1.5)+1):
