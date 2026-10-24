@@ -131,6 +131,8 @@ The following options allow you to fine tune Interlink's flood prevention:
 * `plugins.Interlink.antiflood.seconds`: configure the *X* amount of seconds mentioned above.
 * `plugins.Interlink.antiflood.timeout`: determines the amount of seconds the bot will wait before flood prevention expires (messages are relayed as normal again).
 
+The defaults (10 messages, or 10 of each other event, in 2 seconds; then a 60 second pause) only stop real floods and netsplit storms. Without flood prevention, nothing is ever dropped: messages too long for one IRC line are relayed in full, split into several lines that each repeat the network and sender.
+
 ### Miscellaneous formatting options
 
 - You can enable/disable colors via the configuration variable `plugins.Interlink.color`

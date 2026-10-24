@@ -71,11 +71,12 @@ conf.registerChannelValue(Interlink.antiflood, 'enable',
     registry.Boolean(False, _("""Determines whether flood prevention should be enabled
     for the given channel.""")))
 conf.registerChannelValue(Interlink.antiflood, 'seconds',
-    registry.PositiveInteger(20, _("""Determines how many seconds messages should be queued
+    registry.PositiveInteger(2, _("""Determines how many seconds messages should be queued
         for flood protection.""")))
 conf.registerChannelValue(Interlink.antiflood, 'maximum',
-    registry.PositiveInteger(15, _("""Determines the maximum amount of incoming messages
-        the bot will allow from a relay channel before flood protection is triggered.""")))
+    registry.PositiveInteger(10, _("""Determines the maximum amount of incoming messages
+        the bot will allow from a relay channel before flood protection is triggered. A long
+        message that is split into several lines counts as one.""")))
 conf.registerChannelValue(Interlink.antiflood.maximum, 'nonPrivmsgs',
     registry.PositiveInteger(10, _("""Determines the maximum amount of incoming non-PRIVMSG events
         the bot will allow from a relay channel before flood protection is triggered.""")))
