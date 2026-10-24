@@ -50,7 +50,7 @@ __contributors__ = {
 }
 
 # This is a url where the most recent plugin package can be downloaded.
-__url__ = 'https://github.com/TehPeGaSuS/Interlink'
+__url__ = 'https://github.com/TehPeGaSuS/Limnoria-Interlink'
 
 from . import config
 from . import plugin

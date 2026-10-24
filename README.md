@@ -12,7 +12,7 @@ Clone the Git repository somewhere and add the *parent* directory to your bot's 
 Make sure the directory that you save the plugin to matches the plugin name:
 
 ```
-$ git clone https://github.com/TehPeGaSuS/Interlink Interlink
+$ git clone https://github.com/TehPeGaSuS/Limnoria-Interlink Interlink
 ```
 
 After cloning, you can update your copy of the plugin in place by entering the Interlink directory and running:
