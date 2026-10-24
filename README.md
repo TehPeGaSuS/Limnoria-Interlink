@@ -62,6 +62,31 @@ Or, to delete an entire relay:
 
 Relays require at least two channels to relay between. When the last two channels are removed, the relay is automatically deleted.
 
+## Cross-network moderation
+
+Networks stay independent: modes, ops and bans are never synced between them. Instead, channel operators (halfop or higher) of a relayed channel can ban and kick users on the relay's other networks with these commands, typed in the relayed channel. The commands are not relayed, errors are sent to you as a private notice, and every action is announced in all the relay's channels. Channel operators (halfop or higher) on the target network can't be banned or kicked.
+
+| Command | What it does |
+|---|---|
+| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*@$host` by default) or the mask, and kicks the matching users |
+| `tban [--force] <network> <nick\|mask> [<duration>] [<reason>]` | Like `ban`, but lifted after the duration (`30m`, `2h`, `1d`, `1h30m`...; `moderation.tbanDuration`, 1h, by default) and never set again |
+| `kick <network> <nick> [<reason>]` | Kicks the nick |
+| `unban <id>` or `unban <network> <nick\|mask>` | Removes a ban and its +b |
+| `bans [<network>]` | Lists the relay's active bans |
+| `baninfo <id\|mask>` | Shows a ban's details, including removed ones |
+
+For example, from `#chat` on Libera: `!ban oftc spammer advertising`.
+
+- `<network>` is the network's name in Limnoria. For masks, `*` bans on every network of the relay.
+- **Permanent bans** (`ban`): the +b is removed after an hour (`moderation.liftAfter`) to keep the channel's ban list short, but the ban stays in Interlink. Whenever a matching user joins, changes nick or changes host, the +b is set again and they are kicked with the original reason, until the ban is removed with `unban`.
+- **If a network's op removes one of these bans** with `-b`, Interlink respects it: it doesn't set it back right away. For a permanent ban, that op is told that the ban is still on the bot and how to delete it (`unban <id>`); it's set again when a matching user joins. A `tban` removed by hand is closed.
+- **Too broad**: a ban that would match more than `moderation.maxMatches` users (1 by default) in the target channel is refused, unless `--force` is given. A ban that would match a channel operator is always refused.
+- Mask bans also check everyone already in the channel (Interlink refreshes its view of the channel with WHO).
+- Bans are stored in `data/Interlink-bans.json` with who set them (nick, network and hostmask), when, the reason and the expiry, and who removed them.
+- The bot needs to be a channel operator in the target channel.
+
+Limnoria's Channel plugin also has `ban`, `kick` and `unban` commands. If it's loaded, make Interlink's the default ones (`defaultplugin ban Interlink`, and the same for `kick` and `unban`), or call them as `interlink ban ...`; Channel's stay available as `channel ban ...`.
+
 ## Configuration
 
 Most of the following options are also configurable per channel. For any channel-specific variables, settings on the target relay channel are used for NICK and QUIT messages, while settings on the source channel are applied for all others. This is because nick changes and quits are not bound to any channels.

@@ -99,4 +99,24 @@ conf.registerChannelValue(Interlink.events, 'relaySelfMessages',
     registry.Boolean(True, ("""Determines whether the bot should relay its own messages.
         You may wish to disable this if you are running plugins that announce to the same channel
         on multiple networks (e.g. RSS).""")))
+
+conf.registerGroup(Interlink, 'moderation')
+conf.registerChannelValue(Interlink.moderation, 'banmask',
+    registry.String('*!*@$host', _("""Determines the ban mask used when a nick is banned with
+        the ban and tban commands. $nick, $ident, $host and $account are replaced with the
+        target's details. This is read for the channel and network the ban is set on.""")))
+conf.registerChannelValue(Interlink.moderation, 'maxMatches',
+    registry.PositiveInteger(1, _("""Determines how many users in the target channel a ban
+        may match. Bans matching more are refused as too broad, unless --force is given.""")))
+conf.registerChannelValue(Interlink.moderation, 'liftAfter',
+    registry.NonNegativeInteger(3600, _("""Determines after how many seconds the +b of a
+        permanent ban is removed from the channel, to keep its ban list short. The ban stays
+        in Interlink's database and is set again whenever a matching user joins, until it is
+        removed with the unban command. 0 keeps the +b set.""")))
+conf.registerChannelValue(Interlink.moderation, 'tbanDuration',
+    registry.PositiveInteger(3600, _("""Determines how long, in seconds, a tban lasts when no
+        duration is given.""")))
+conf.registerChannelValue(Interlink.moderation, 'announce',
+    registry.Boolean(True, _("""Determines whether bans, kicks and unbans are announced in
+        every channel of the relay.""")))
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

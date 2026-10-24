@@ -29,9 +29,14 @@
 ###
 
 from copy import deepcopy
+import functools
+import json
+import os
 import pickle
 import re
+import string
 import textwrap
+import threading
 import time
 
 import supybot.world as world
@@ -44,6 +49,7 @@ from supybot.commands import *
 import supybot.plugins as plugins
 import supybot.ircutils as ircutils
 import supybot.callbacks as callbacks
+import supybot.schedule as schedule
 from supybot.utils.structures import TimeoutQueue
 try:
     from supybot.i18n import PluginInternationalization
@@ -57,6 +63,23 @@ except ImportError:
 filename = conf.supybot.directories.data.dirize("Interlink.db")
 # Interlink is a fork of RelayNext; its relays are picked up if Interlink has no database yet.
 relaynext_filename = conf.supybot.directories.data.dirize("RelayNext.db")
+bans_filename = conf.supybot.directories.data.dirize("Interlink-bans.json")
+
+class ModerationError(Exception):
+    """An error in a moderation command, sent to the caller as a private notice so that it isn't
+    relayed (bot messages in channels are relayed when events.relaySelfMessages is on)."""
+
+def private_errors(f):
+    @functools.wraps(f)
+    def newf(self, irc, msg, *args):
+        try:
+            return f(self, irc, msg, *args)
+        except ModerationError as e:
+            irc.error(str(e), private=True, notice=True)
+    return newf
+
+# Commands that are never relayed (the moderation commands below)
+MODERATION_COMMANDS = {'ban', 'tban', 'kick', 'unban', 'bans', 'baninfo'}
 
 class Interlink(callbacks.Plugin):
     """Relays channels between networks, with cross-network moderation for channel ops."""
@@ -97,9 +120,20 @@ class Interlink(callbacks.Plugin):
         # ran on every flush cycle.
         world.flushers.append(self.exportDB)
 
+        self.banLock = threading.RLock()
+        self.bandb = {'next_id': 1, 'bans': {}}
+        self.loadBans()
+        # Channels (network, channel) to check against mask bans once their WHO reply ends
+        self.pendingScans = set()
+        self.scheduleBanEvents()
+
     def die(self):
         self.exportDB()
         world.flushers.remove(self.exportDB)
+        self.saveBans()
+        for name in list(schedule.schedule.events):
+            if isinstance(name, str) and name.startswith('Interlink-'):
+                schedule.removeEvent(name)
         self.__parent.die()
 
     ### Relayer core
@@ -357,17 +391,26 @@ class Interlink(callbacks.Plugin):
                             otherIrc.queueMsg(out_msg)
 
     def doPrivmsg(self, irc, msg):
+        if msg.channel and self._isModerationCommand(irc, msg):
+            return  # Moderation commands stay on their network
         self.relay(irc, msg, channel=msg.channel)
+
+    def _isModerationCommand(self, irc, msg):
+        payload = callbacks.addressed(irc, msg)
+        words = payload.lower().split() if payload else []
+        if words[:1] == [self.name().lower()]:
+            words = words[1:]
+        return bool(words) and words[0] in MODERATION_COMMANDS
 
     def doNonPrivmsg(self, irc, msg):
         if self.registryValue("events.relay%ss" % msg.command, channel=msg.channel, network=irc.network):
             self.relay(irc, msg, channel=msg.channel)
 
-    doTopic = doPart = doKick = doMode = doJoin = doNonPrivmsg
+    doTopic = doPart = doKick = doNonPrivmsg  # doJoin and doMode also enforce bans (below)
 
     # NICK and QUIT aren't channel specific, so they require a bit
     # of extra handling
-    def doNick(self, irc, msg):
+    def _relayNick(self, irc, msg):
         for channel in msg.tagged('channels'):
             if self.registryValue("events.relaynicks", channel=channel, network=irc.network):
                 self.relay(irc, msg, channel)
@@ -584,6 +627,530 @@ class Interlink(callbacks.Plugin):
         self.db = {}
         irc.replySuccess()
     clear = wrap(clear, ['admin'])
+
+    ### Moderation: ban, tban, kick and unban across networks
+
+    def loadBans(self):
+        try:
+            with open(bans_filename) as f:
+                self.bandb = json.load(f)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            self.log.warning('Interlink: Unable to load the ban database: %s', e)
+
+    def saveBans(self):
+        with self.banLock:
+            try:
+                tmp = bans_filename + '.tmp'
+                with open(tmp, 'w') as f:
+                    json.dump(self.bandb, f, indent=4)
+                os.replace(tmp, bans_filename)
+            except Exception as e:
+                self.log.warning('Interlink: Unable to write the ban database: %s', e)
+
+    def _activeBans(self):
+        return [ban for ban in self.bandb['bans'].values() if ban['active']]
+
+    def _relaysOf(self, channelpair):
+        """Returns the names of the relays the given #channel@network is in."""
+        return [name for name, relay in self.db.items() if channelpair.lower() in relay]
+
+    @staticmethod
+    def _parseDuration(text):
+        """Parses durations like 30m, 2h, 1d or 1h30m into seconds; returns None otherwise."""
+        parts = re.findall(r'(\d+)([smhdw])', text.lower())
+        if not parts or ''.join(n + u for n, u in parts) != text.lower():
+            return None
+        units = {'s': 1, 'm': 60, 'h': 3600, 'd': 86400, 'w': 604800}
+        return sum(int(n) * units[u] for n, u in parts)
+
+    @staticmethod
+    def _formatDuration(seconds):
+        out = []
+        for unit, size in (('w', 604800), ('d', 86400), ('h', 3600), ('m', 60), ('s', 1)):
+            if seconds >= size:
+                out.append('%d%s' % (seconds // size, unit))
+                seconds %= size
+        return ''.join(out) or '0s'
+
+    def _context(self, irc, msg):
+        """Checks that a moderation command is used by a halfop or higher in a relayed channel,
+        returning the caller's channel and the names of its relays."""
+        channel = msg.channel
+        if not channel:
+            raise ModerationError(_('Use this command in a relayed channel.'))
+        relays = self._relaysOf('%s@%s' % (channel, irc.network))
+        if not relays:
+            raise ModerationError(_('%s is not relayed.') % channel)
+        chanstate = irc.state.channels.get(channel)
+        if not chanstate or not chanstate.isHalfopPlus(msg.nick):
+            raise ModerationError(_('You must be a channel operator in %s to use this.') % channel)
+        return channel, relays
+
+    def _targetChannels(self, relays, network):
+        """Returns the (Irc, channel) pairs of the given relays on network ('*' for all)."""
+        targets = []
+        for name in relays:
+            for channelpair in self.db.get(name, ()):
+                chan, net = channelpair.split('@', 1)
+                if network != '*' and net != network.lower():
+                    continue
+                otherIrc = world.getIrc(net)
+                if otherIrc and (otherIrc, chan) not in targets:
+                    targets.append((otherIrc, chan))
+        return targets
+
+    @staticmethod
+    def _isProtected(otherIrc, channel, nick):
+        """Users who can moderate (halfop or higher), and the bot itself, can't be targeted."""
+        chanstate = otherIrc.state.channels[channel]
+        return nick == otherIrc.nick or chanstate.isHalfopPlus(nick)
+
+    def _matches(self, otherIrc, channel, mask):
+        """Returns the nicks in channel whose hostmask matches mask."""
+        nicks = []
+        for nick in otherIrc.state.channels[channel].users:
+            try:
+                hostmask = otherIrc.state.nickToHostmask(nick)
+            except KeyError:
+                continue
+            if ircutils.hostmaskPatternEqual(mask, hostmask):
+                nicks.append(nick)
+        return nicks
+
+    def _makeMask(self, otherIrc, channel, nick):
+        try:
+            hostmask = otherIrc.state.nickToHostmask(nick)
+        except KeyError:
+            return None
+        n, ident, host = ircutils.splitHostmask(hostmask)
+        try:
+            account = otherIrc.state.nickToAccount(nick) or ''
+        except KeyError:
+            account = ''
+        template = self.registryValue('moderation.banmask', channel=channel, network=otherIrc.network)
+        if '$account' in template and not account:
+            return None
+        return string.Template(template).safe_substitute(nick=n, ident=ident, host=host,
+                                                         account=account)
+
+    def _announce(self, relays, text):
+        """Sends text to every channel of the given relays (without relaying it again)."""
+        sent = set()
+        for name in relays:
+            for channelpair in self.db.get(name, ()):
+                chan, net = channelpair.split('@', 1)
+                otherIrc = world.getIrc(net)
+                if not otherIrc or (net, chan) in sent:
+                    continue
+                if not self.registryValue('moderation.announce', channel=chan, network=net):
+                    continue
+                chanstate = otherIrc.state.channels.get(chan)
+                if chanstate and otherIrc.nick in chanstate.users:
+                    out = ircmsgs.privmsg(chan, '*** %s' % text)
+                    out.tag('relayedMsg')
+                    otherIrc.queueMsg(out)
+                    sent.add((net, chan))
+
+    def _caller(self, irc, msg):
+        return {'nick': msg.nick, 'network': irc.network, 'hostmask': msg.prefix}
+
+    def _setBan(self, otherIrc, channel, ban):
+        """Sets +b for ban on channel, and schedules its lift for permanent bans."""
+        key = '%s@%s' % (channel, otherIrc.network.lower())
+        state = ban['channels'].setdefault(key, {'set': False, 'set_at': None})
+        if not state['set']:
+            otherIrc.queueMsg(ircmsgs.ban(channel, ban['mask']))
+            state['set'] = True
+            state['set_at'] = time.time()
+        if ban['expires'] is None:
+            liftAfter = self.registryValue('moderation.liftAfter', channel=channel, network=otherIrc.network)
+            if liftAfter:
+                self._schedule('Interlink-lift-%s-%s' % (ban['id'], key), state['set_at'] + liftAfter,
+                               self._liftBan, ban['id'], key)
+
+    def _schedule(self, name, when, f, *args):
+        try:
+            schedule.removeEvent(name)
+        except KeyError:
+            pass
+        schedule.addEvent(f, max(when, time.time() + 1), name, args=list(args))
+
+    def _unschedule(self, ban):
+        for name in list(schedule.schedule.events):
+            if isinstance(name, str) and (name.startswith('Interlink-lift-%s-' % ban['id']) or
+                                          name == 'Interlink-expire-%s' % ban['id']):
+                schedule.removeEvent(name)
+
+    def _removeBanFromChannels(self, ban):
+        for key, state in ban['channels'].items():
+            if not state['set']:
+                continue
+            chan, net = key.split('@', 1)
+            otherIrc = world.getIrc(net)
+            if otherIrc:
+                otherIrc.queueMsg(ircmsgs.unban(chan, ban['mask']))
+            state['set'] = False
+
+    def _liftBan(self, banid, key):
+        """Removes the +b of a permanent ban after moderation.liftAfter; it stays enforced."""
+        with self.banLock:
+            ban = self.bandb['bans'].get(str(banid))
+            if not ban or not ban['active'] or not ban['channels'].get(key, {}).get('set'):
+                return
+            chan, net = key.split('@', 1)
+            otherIrc = world.getIrc(net)
+            if otherIrc is None:  # Not connected now; try again later
+                self._schedule('Interlink-lift-%s-%s' % (banid, key), time.time() + 60, self._liftBan, banid, key)
+                return
+            otherIrc.queueMsg(ircmsgs.unban(chan, ban['mask']))
+            ban['channels'][key]['set'] = False
+            self.saveBans()
+
+    def _expireBan(self, banid):
+        with self.banLock:
+            ban = self.bandb['bans'].get(str(banid))
+            if not ban or not ban['active']:
+                return
+            # (any() is shadowed by the supybot.commands converter of the same name)
+            offline = [key for key, st in ban['channels'].items()
+                       if st['set'] and not world.getIrc(key.split('@', 1)[1])]
+            if offline:
+                self._schedule('Interlink-expire-%s' % banid, time.time() + 60, self._expireBan, banid)
+                return
+            self._removeBanFromChannels(ban)
+            ban['active'] = False
+            ban['removed_by'] = 'expired'
+            ban['removed_at'] = time.time()
+            self._unschedule(ban)
+            self.saveBans()
+            self.log.info('Interlink: ban #%s (%s) expired', banid, ban['mask'])
+
+    def scheduleBanEvents(self):
+        """Reschedules lifts and expiries after a restart."""
+        with self.banLock:
+            for ban in self._activeBans():
+                if ban['expires'] is not None:
+                    self._schedule('Interlink-expire-%s' % ban['id'], ban['expires'], self._expireBan, ban['id'])
+                else:
+                    for key, state in ban['channels'].items():
+                        if state['set']:
+                            chan, net = key.split('@', 1)
+                            liftAfter = self.registryValue('moderation.liftAfter', channel=chan, network=net)
+                            if liftAfter:
+                                self._schedule('Interlink-lift-%s-%s' % (ban['id'], key),
+                                               state['set_at'] + liftAfter, self._liftBan, ban['id'], key)
+
+    def _enforce(self, otherIrc, channel, ban, nicks):
+        """Bans (if needed) and kicks the given nicks from channel for ban."""
+        chanstate = otherIrc.state.channels.get(channel)
+        if not chanstate or not chanstate.isHalfopPlus(otherIrc.nick):
+            self.log.warning('Interlink: cannot enforce ban #%s on %s@%s: not opped there',
+                             ban['id'], channel, otherIrc.network)
+            return False
+        nicks = [nick for nick in nicks if not self._isProtected(otherIrc, channel, nick)]
+        if not nicks:
+            return True
+        self._setBan(otherIrc, channel, ban)
+        for nick in nicks:
+            otherIrc.queueMsg(ircmsgs.kick(channel, nick, ban['kick_reason']))
+        return True
+
+    def _bansFor(self, otherIrc, channel):
+        """Returns the active bans that apply to channel on otherIrc's network."""
+        channelpair = '%s@%s' % (channel, otherIrc.network.lower())
+        relays = self._relaysOf(channelpair)
+        return [ban for ban in self._activeBans()
+                if ban['relay'] in relays and ban['network'] in ('*', otherIrc.network.lower())]
+
+    def _checkUser(self, otherIrc, channel, nick):
+        """Kicks (and bans again) nick from channel if it matches a stored ban."""
+        if nick == otherIrc.nick:
+            return
+        try:
+            hostmask = otherIrc.state.nickToHostmask(nick)
+        except KeyError:
+            return
+        with self.banLock:
+            for ban in self._bansFor(otherIrc, channel):
+                if ircutils.hostmaskPatternEqual(ban['mask'], hostmask):
+                    was_set = ban['channels'].get('%s@%s' % (channel, otherIrc.network.lower()), {}).get('set')
+                    if self._enforce(otherIrc, channel, ban, [nick]):
+                        self.saveBans()
+                        if not was_set:
+                            self._announce([ban['relay']], _('%s (%s) matched ban #%s on %s and was banned again.') %
+                                           (nick, ban['mask'], ban['id'], otherIrc.network))
+                    return
+
+    def _scanChannel(self, otherIrc, channel):
+        with self.banLock:
+            for ban in self._bansFor(otherIrc, channel):
+                nicks = self._matches(otherIrc, channel, ban['mask'])
+                if nicks and self._enforce(otherIrc, channel, ban, nicks):
+                    self.saveBans()
+
+    def doJoin(self, irc, msg):
+        self.doNonPrivmsg(irc, msg)
+        if msg.nick != irc.nick:
+            for channel in msg.args[0].split(','):
+                self._checkUser(irc, channel, msg.nick)
+
+    def doNick(self, irc, msg):
+        self._relayNick(irc, msg)
+        for channel in msg.tagged('channels') or ():
+            self._checkUser(irc, channel, msg.args[0])
+
+    def doChghost(self, irc, msg):
+        for channel, chanstate in irc.state.channels.items():
+            if msg.nick in chanstate.users:
+                self._checkUser(irc, channel, msg.nick)
+
+    def do315(self, irc, msg):
+        """End of WHO: check the channel against mask bans (after we join, or a new mask ban)."""
+        channel = msg.args[1]
+        if irc.isChannel(channel):
+            self.pendingScans.discard((irc.network, channel))
+            self._scanChannel(irc, channel)
+
+    def doMode(self, irc, msg):
+        self.doNonPrivmsg(irc, msg)
+        channel = msg.args[0]
+        if not irc.isChannel(channel) or msg.nick == irc.nick:
+            return
+        key = '%s@%s' % (channel, irc.network.lower())
+        with self.banLock:
+            changed = False
+            for (mode, arg) in ircutils.separateModes(msg.args[1:]):
+                if mode != '-b' or not arg:
+                    continue
+                for ban in self._bansFor(irc, channel):
+                    state = ban['channels'].get(key)
+                    if not state or not state['set'] or not ircutils.strEqual(ban['mask'], arg):
+                        continue
+                    # A local op removed the ban: respect it.
+                    state['set'] = False
+                    changed = True
+                    try:
+                        schedule.removeEvent('Interlink-lift-%s-%s' % (ban['id'], key))
+                    except KeyError:
+                        pass
+                    if ban['expires'] is None:
+                        irc.queueMsg(ircmsgs.notice(msg.nick, _(
+                            'You removed %s on %s. It is still a permanent ban on %s and will be set '
+                            'again when a matching user joins; to delete it there, type: unban %s') %
+                            (ban['mask'], channel, irc.nick, ban['id'])))
+                    else:
+                        ban['active'] = False
+                        ban['removed_by'] = '%s@%s (-b)' % (msg.nick, irc.network)
+                        ban['removed_at'] = time.time()
+                        self._unschedule(ban)
+            if changed:
+                self.saveBans()
+
+    def _addBan(self, irc, msg, relays, network, target, reason, duration, force):
+        """Shared code of ban and tban."""
+        network = network.lower()
+        targets = self._targetChannels(relays, network)
+        if not targets:
+            raise ModerationError(_('The relay has no channel on %s (or I am not connected there).') % network)
+
+        is_mask = '!' in target or '@' in target or '*' in target
+        if not is_mask and network == '*':
+            raise ModerationError(_('Give a network to ban a nick; "*" (all networks) only works with masks.'))
+
+        if is_mask:
+            if not ircutils.isUserHostmask(target):
+                raise ModerationError(_('%s is not a valid nick!user@host mask.') % target)
+            mask = target
+            nick = None
+        else:
+            otherIrc, chan = targets[0]
+            if target not in otherIrc.state.channels[chan].users:
+                raise ModerationError(_('%s is not in %s on %s.') % (target, chan, otherIrc.network))
+            if self._isProtected(otherIrc, chan, target):
+                raise ModerationError(_('%s is a channel operator in %s on %s.') % (target, chan, otherIrc.network))
+            mask = self._makeMask(otherIrc, chan, target)
+            if mask is None:
+                raise ModerationError(_("I don't know enough about %s to build a ban mask.") % target)
+            nick = target
+
+        matched = []
+        for otherIrc, chan in targets:
+            chanstate = otherIrc.state.channels.get(chan)
+            if not chanstate or not chanstate.isHalfopPlus(otherIrc.nick):
+                raise ModerationError(_("I'm not a channel operator in %s on %s.") % (chan, otherIrc.network))
+            nicks = self._matches(otherIrc, chan, mask)
+            protected = [n for n in nicks if self._isProtected(otherIrc, chan, n)]
+            if protected:
+                raise ModerationError(_('%s would match channel operators in %s on %s: %s') %
+                          (mask, chan, otherIrc.network, ', '.join(protected)))
+            maxMatches = self.registryValue('moderation.maxMatches', channel=chan, network=otherIrc.network)
+            if len(nicks) > maxMatches and not force:
+                raise ModerationError(_("%s would match %d users in %s on %s; that's too broad. Give a narrower "
+                            "mask, or use --force.") % (mask, len(nicks), chan, otherIrc.network))
+            matched.append((otherIrc, chan, nicks))
+
+        setter = '%s@%s' % (msg.nick, irc.network)
+        reason = reason or _('No reason given')
+        with self.banLock:
+            banid = self.bandb['next_id']
+            self.bandb['next_id'] += 1
+            now = time.time()
+            ban = {'id': banid, 'relay': relays[0], 'network': network, 'mask': mask, 'nick': nick,
+                   'reason': reason, 'kick_reason': _('Banned by %s: %s') % (setter, reason),
+                   'setter': self._caller(irc, msg), 'time': now,
+                   'expires': now + duration if duration else None,
+                   'active': True, 'removed_by': None, 'removed_at': None, 'channels': {}}
+            self.bandb['bans'][str(banid)] = ban
+            for otherIrc, chan, nicks in matched:
+                self._setBan(otherIrc, chan, ban)
+                for n in nicks:
+                    otherIrc.queueMsg(ircmsgs.kick(chan, n, ban['kick_reason']))
+                if is_mask:
+                    # Refresh our view of the channel; do315 kicks anyone else matching.
+                    self.pendingScans.add((otherIrc.network, chan))
+                    otherIrc.queueMsg(ircmsgs.who(chan, args=('%tuhnairf,1',)))
+            if duration:
+                self._schedule('Interlink-expire-%s' % banid, ban['expires'], self._expireBan, banid)
+            self.saveBans()
+
+        where = _('all networks') if network == '*' else network
+        what = '%s (%s)' % (nick, mask) if nick else mask
+        length = (_(' for %s') % self._formatDuration(duration)) if duration else ''
+        self._announce(relays, _('%s banned %s on %s%s: %s [#%s]') % (setter, what, where, length, reason, banid))
+
+    @wrap([getopts({'force': ''}), 'something', 'something', additional('text')])
+    @private_errors
+    def ban(self, irc, msg, args, opts, network, target, reason):
+        """[--force] <network> <nick|mask> [<reason>]
+
+        Bans <nick> (using the moderation.banmask setting) or <mask> from the relay's channel on
+        <network>, and kicks the matching users. <network> can be * for every network of the relay
+        (masks only). The ban is permanent: its +b is removed after moderation.liftAfter, but it is
+        set again whenever a matching user joins, until it is removed with unban. Masks that would
+        match more than moderation.maxMatches users are refused unless --force is given.
+        Channel operators of a relayed channel can use this; channel operators elsewhere can't be
+        banned."""
+        channel, relays = self._context(irc, msg)
+        self._addBan(irc, msg, relays, network, target, reason, None, 'force' in dict(opts))
+
+    @wrap([getopts({'force': ''}), 'something', 'something', additional('text')])
+    @private_errors
+    def tban(self, irc, msg, args, opts, network, target, text):
+        """[--force] <network> <nick|mask> [<duration>] [<reason>]
+
+        Like ban, but the ban is lifted after <duration> (e.g. 30m, 2h, 1d; defaults to
+        moderation.tbanDuration, 1h) and never set again."""
+        channel, relays = self._context(irc, msg)
+        words = (text or '').split(None, 1)
+        duration = self._parseDuration(words[0]) if words else None
+        if duration:
+            reason = words[1] if len(words) > 1 else None
+        else:
+            duration = self.registryValue('moderation.tbanDuration', channel=channel, network=irc.network)
+            reason = text
+        self._addBan(irc, msg, relays, network, target, reason, duration, 'force' in dict(opts))
+
+    @wrap(['something', 'nick', additional('text')])
+    @private_errors
+    def kick(self, irc, msg, args, network, nick, reason):
+        """<network> <nick> [<reason>]
+
+        Kicks <nick> from the relay's channel on <network>."""
+        channel, relays = self._context(irc, msg)
+        targets = self._targetChannels(relays, network)
+        if network == '*' or not targets:
+            raise ModerationError(_('The relay has no channel on %s (or I am not connected there).') % network)
+        otherIrc, chan = targets[0]
+        chanstate = otherIrc.state.channels.get(chan)
+        if not chanstate or nick not in chanstate.users:
+            raise ModerationError(_('%s is not in %s on %s.') % (nick, chan, otherIrc.network))
+        if self._isProtected(otherIrc, chan, nick):
+            raise ModerationError(_('%s is a channel operator in %s on %s.') % (nick, chan, otherIrc.network))
+        if not chanstate.isHalfopPlus(otherIrc.nick):
+            raise ModerationError(_("I'm not a channel operator in %s on %s.") % (chan, otherIrc.network))
+        setter = '%s@%s' % (msg.nick, irc.network)
+        reason = reason or _('No reason given')
+        otherIrc.queueMsg(ircmsgs.kick(chan, nick, _('Kicked by %s: %s') % (setter, reason)))
+        self._announce(relays, _('%s kicked %s from %s on %s: %s') % (setter, nick, chan, otherIrc.network, reason))
+
+    @wrap(['something', additional('something')])
+    @private_errors
+    def unban(self, irc, msg, args, first, second):
+        """<id> | <network> <nick|mask>
+
+        Removes a ban set with ban or tban, given by its id (see bans) or by the network and the
+        banned nick or mask, and removes its +b."""
+        channel, relays = self._context(irc, msg)
+        with self.banLock:
+            candidates = [ban for ban in self._activeBans() if ban['relay'] in relays]
+            if second is None:
+                found = [ban for ban in candidates if str(ban['id']) == first.lstrip('#')]
+            else:
+                network = first.lower()
+                found = [ban for ban in candidates if ban['network'] == network and
+                         (ircutils.strEqual(ban['mask'], second) or
+                          (ban['nick'] and ircutils.strEqual(ban['nick'], second)))]
+            if not found:
+                raise ModerationError(_('No such ban.'))
+            setter = '%s@%s' % (msg.nick, irc.network)
+            for ban in found:
+                self._removeBanFromChannels(ban)
+                ban['active'] = False
+                ban['removed_by'] = setter
+                ban['removed_at'] = time.time()
+                self._unschedule(ban)
+            self.saveBans()
+        for ban in found:
+            where = _('all networks') if ban['network'] == '*' else ban['network']
+            self._announce(relays, _('%s removed ban #%s (%s) on %s') % (setter, ban['id'], ban['mask'], where))
+
+    @wrap([additional('something')])
+    @private_errors
+    def bans(self, irc, msg, args, network):
+        """[<network>]
+
+        Lists the active bans of this channel's relay, optionally only those on <network>."""
+        channel, relays = self._context(irc, msg)
+        found = [ban for ban in self._activeBans() if ban['relay'] in relays and
+                 (network is None or ban['network'] in (network.lower(), '*'))]
+        if not found:
+            irc.reply(_('No active bans.'), private=True, notice=True)
+            return
+        for ban in sorted(found, key=lambda b: b['id']):
+            irc.reply(self._describe(ban), private=True, notice=True)
+
+    @wrap(['something'])
+    @private_errors
+    def baninfo(self, irc, msg, args, which):
+        """<id|mask>
+
+        Shows the details of a ban, including removed ones."""
+        channel, relays = self._context(irc, msg)
+        found = [ban for ban in self.bandb['bans'].values() if ban['relay'] in relays and
+                 (str(ban['id']) == which.lstrip('#') or ircutils.strEqual(ban['mask'], which))]
+        if not found:
+            raise ModerationError(_('No such ban.'))
+        for ban in sorted(found, key=lambda b: b['id']):
+            irc.reply(self._describe(ban, full=True), private=True, notice=True)
+
+    def _describe(self, ban, full=False):
+        where = _('all networks') if ban['network'] == '*' else ban['network']
+        when = time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(ban['time']))
+        setter = '%s@%s' % (ban['setter']['nick'], ban['setter']['network'])
+        if ban['expires']:
+            kind = _('expires %s') % time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(ban['expires']))
+        else:
+            kind = _('permanent')
+        s = '#%s %s on %s (%s), by %s on %s: %s' % (ban['id'], ban['mask'], where, kind, setter, when, ban['reason'])
+        if full:
+            s += ' [%s]' % ban['setter']['hostmask']
+            if not ban['active']:
+                s += _('; removed by %s on %s') % (ban['removed_by'], time.strftime(
+                    '%Y-%m-%d %H:%M UTC', time.gmtime(ban['removed_at'])))
+        return s
+
 
 Class = Interlink
 
