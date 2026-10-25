@@ -40,13 +40,10 @@ import threading
 import time
 
 import supybot.world as world
-import supybot.irclib as irclib
 import supybot.ircmsgs as ircmsgs
 import supybot.ircdb as ircdb
 import supybot.conf as conf
-import supybot.utils as utils
 from supybot.commands import *
-import supybot.plugins as plugins
 import supybot.ircutils as ircutils
 import supybot.callbacks as callbacks
 import supybot.schedule as schedule

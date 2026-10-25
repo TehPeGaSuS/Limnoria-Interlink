@@ -1,0 +1,12 @@
+target-version = "py39"
+
+[lint]
+# Syntax errors and pyflakes: undefined names, unused imports and variables, etc.
+select = ["E9", "F"]
+# Limnoria plugins use `from supybot.commands import *` and `from supybot.test import *`.
+ignore = ["F403", "F405"]
+
+[lint.per-file-ignores]
+# Plugin template imports: `from . import test` and configure()'s supybot.questions.
+"__init__.py" = ["F401"]
+"config.py" = ["F401"]
