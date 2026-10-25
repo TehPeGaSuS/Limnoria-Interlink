@@ -68,7 +68,7 @@ Networks stay independent: modes, ops and bans are never synced between them. In
 
 | Command | What it does |
 |---|---|
-| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*@$host` by default) or the mask on that network, and kicks the matching users |
+| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*$ident@$host` by default) or the mask on that network, and kicks the matching users |
 | `ban --global [--force] <mask> [<reason>]` | Bans the mask on every network of the relay (see below) |
 | `tban [--global] [--force] ... [<duration>] [<reason>]` | Like `ban`, but lifted after the duration (`30m`, `2h`, `1d`, `1h30m`...; `moderation.tbanDuration`, 1h, by default) and never set again |
 | `kick <network> <nick> [<reason>]` | Kicks the nick |
@@ -83,6 +83,10 @@ For example, from `#chat` on Libera: `!ban oftc spammer advertising`.
 - **Permanent bans** (`ban`): the +b is removed after an hour (`moderation.liftAfter`) to keep the channel's ban list short, but the ban stays in Interlink. Whenever a matching user joins, changes nick or changes host, the +b is set again and they are kicked with the original reason, until the ban is removed with `unban`.
 - **If a network's op removes one of these bans** with `-b`, Interlink respects it: it doesn't set it back right away. For a permanent ban, that op is told that the ban is still on the bot and how to delete it (`unban <id>`); it's set again when a matching user joins. A `tban` removed by hand is closed.
 - **Too broad**: a ban that would match more than `moderation.maxMatches` users (1 by default) in the target channel is refused, unless `--force` is given. A ban that would match a channel operator is always refused.
+- **Ban mask**: `moderation.banmask` builds the mask for nick bans from `$nick`, `$ident`, `$host` and `$account`. The default `*!*$ident@$host` keeps users who share a host apart (IRCCloud, webchat gateways, shells, bouncer providers), and `$ident` has no leading `~`, so the ban matches whether or not identd answers. Users can change an unconfirmed ident, though; on networks where that matters more than shared hosts, use `*!*@$host`. The setting can be global, per network or per channel, and the most specific one for the channel the ban is set on wins:
+  - `config plugins.Interlink.moderation.banmask *!*$ident@$host` (everywhere)
+  - `config network plugins.Interlink.moderation.banmask *!*@$host` (the network you send it on; `config network oftc plugins.Interlink.moderation.banmask ...` sets it for another)
+  - `config channel #chan plugins.Interlink.moderation.banmask $nick!*@*` (one channel)
 - Mask bans also check everyone already in the channel (Interlink refreshes its view of the channel with WHO).
 - Bans are stored in `data/Interlink-bans.json` with who set them (nick, network and hostmask), when, the reason and the expiry, and who removed them.
 - The bot needs to be a channel operator in the target channel.

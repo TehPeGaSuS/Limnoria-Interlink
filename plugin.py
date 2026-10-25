@@ -833,8 +833,9 @@ class Interlink(callbacks.Plugin):
         template = self.registryValue('moderation.banmask', channel=channel, network=otherIrc.network)
         if '$account' in template and not account:
             return None
-        return string.Template(template).safe_substitute(nick=n, ident=ident, host=host,
-                                                         account=account)
+        # Without the ~ of an ident that no identd confirmed, so "*$ident" matches either way
+        return string.Template(template).safe_substitute(nick=n, ident=ident.lstrip('~'),
+                                                         host=host, account=account)
 
     def _announce(self, relays, text):
         """Sends text to every channel of the given relays (without relaying it again)."""

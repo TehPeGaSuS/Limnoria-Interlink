@@ -818,13 +818,13 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
     def testBanNick(self):
         self.command('ban testnet2 bob spamming')
         out2 = self.drain(self.irc2)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         kicks = self.find(out2, 'KICK', self.chan2name, 'bob')
         self.assertTrue(kicks, out2)
         self.assertEqual(kicks[0].args[2], 'Banned by alice@testnet1: spamming')
         out1 = self.drain(self.irc1)
         announce = [m.args[1] for m in out1 if m.command == 'PRIVMSG' and m.args[0] == self.chan1name]
-        self.assertTrue(any('alice@testnet1 banned bob (*!*@bob.example) on testnet2: spamming [#1]' in a
+        self.assertTrue(any('alice@testnet1 banned bob (*!*bob@bob.example) on testnet2: spamming [#1]' in a
                             for a in announce), out1)
         # The command itself is not relayed
         self.assertFalse([m for m in out2 if m.command == 'PRIVMSG' and 'ban testnet2' in m.args[1]], out2)
@@ -877,6 +877,38 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         out2 = self.drain(self.irc2)
         self.assertEqual(len(self.find(out2, 'KICK', self.chan2name)), 2, out2)
 
+    def testDefaultMaskMatchesWithOrWithoutTilde(self):
+        self.command('ban testnet2 bob')
+        out2 = self.drain(self.irc2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
+        # The same user coming back with identd running
+        self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='bob!bob@bob.example'))
+        self.assertTrue(self.find(self.drain(self.irc2), 'KICK', self.chan2name), out2)
+
+    def testSharedHostWithOtherIdentIsNotTooBroad(self):
+        self.addUser(self.irc2, self.chan2, 'erin', 'erin!~erin@bob.example')
+        self.command('ban testnet2 bob')
+        out2 = self.drain(self.irc2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
+        self.assertEqual(len(self.find(out2, 'KICK', self.chan2name)), 1, out2)
+
+    def banmask(self, network=None, channel=None):
+        return conf.supybot.plugins.interlink.moderation.banmask.getSpecific(
+            network=network, channel=channel, fallback_to_channel=False)
+
+    def testBanmaskPerNetwork(self):
+        with self.banmask('testnet2').context('*!*@$host'):
+            self.command('ban testnet2 bob')
+            out2 = self.drain(self.irc2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*@bob.example'), out2)
+
+    def testBanmaskPerChannelBeatsNetwork(self):
+        with self.banmask('testnet2').context('*!*@$host'), \
+                self.banmask('testnet2', self.chan2name).context('$nick!*@*'):
+            self.command('ban testnet2 bob')
+            out2 = self.drain(self.irc2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', 'bob!*@*'), out2)
+
     def testTban(self):
         self.command('tban testnet2 bob')
         self.drain(self.irc2)
@@ -893,7 +925,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
     def testTbanExpires(self):
         self.command('tban testnet2 bob 1s')
         out2 = self.drain(self.irc2, 3)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         self.assertFalse(self.plugin.bandb['bans']['1']['active'])
         # Never set again
         self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='bob!~bob@bob.example'))
@@ -903,14 +935,14 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         with conf.supybot.plugins.interlink.moderation.liftAfter.context(1):
             self.command('ban testnet2 bob')
             out2 = self.drain(self.irc2, 3)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         ban = self.plugin.bandb['bans']['1']
         self.assertTrue(ban['active'])
         # bob comes back: +b again, kicked with the stored reason, announced
         self.chan2.removeUser('bob')
         self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='bob!~bob@bob.example'))
         out2 = self.drain(self.irc2)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         kicks = self.find(out2, 'KICK', self.chan2name, 'bob')
         self.assertTrue(kicks and kicks[0].args[2] == 'Banned by alice@testnet1: No reason given', out2)
         out1 = self.drain(self.irc1)
@@ -919,10 +951,10 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
     def testManualUnbanOfPermanentBan(self):
         self.command('ban testnet2 bob')
         self.drain(self.irc2)
-        self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*@bob.example', prefix='carol!~carol@op.testnet2'))
+        self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*bob@bob.example', prefix='carol!~carol@op.testnet2'))
         out2 = self.drain(self.irc2)
         notes = self.notices(out2, 'carol')
-        self.assertTrue(any('You removed *!*@bob.example on %s' % self.chan2name in n and 'unban 1' in n
+        self.assertTrue(any('You removed *!*bob@bob.example on %s' % self.chan2name in n and 'unban 1' in n
                             for n in notes), out2)
         self.assertFalse(self.find(out2, 'MODE', self.chan2name, '+b'))  # not put back right away
         self.assertTrue(self.plugin.bandb['bans']['1']['active'])
@@ -930,13 +962,13 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.chan2.removeUser('bob')
         self.irc2.feedMsg(ircmsgs.join(self.chan2name, prefix='bob!~bob@bob.example'))
         out2 = self.drain(self.irc2)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         self.assertTrue(self.find(out2, 'KICK', self.chan2name, 'bob'), out2)
 
     def testManualUnbanOfTban(self):
         self.command('tban testnet2 bob')
         self.drain(self.irc2)
-        self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*@bob.example', prefix='carol!~carol@op.testnet2'))
+        self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*bob@bob.example', prefix='carol!~carol@op.testnet2'))
         self.drain(self.irc2)
         ban = self.plugin.bandb['bans']['1']
         self.assertFalse(ban['active'])
@@ -947,7 +979,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.drain(self.irc2)
         self.command('unban 1')
         out2 = self.drain(self.irc2)
-        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*@bob.example'), out2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         out1 = self.drain(self.irc1)
         self.assertTrue(any('alice@testnet1 removed ban #1' in m.args[1] for m in out1 if m.command == 'PRIVMSG'), out1)
         self.chan2.removeUser('bob')
@@ -958,7 +990,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.command('ban testnet2 dave')
         self.drain(self.irc2)
         self.command('unban testnet2 dave')
-        self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', '*!*@dave.example'))
+        self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', '*!*dave@dave.example'))
 
     def testGlobalBan(self):
         self.addUser(self.irc1, self.chan1, 'spambot1', 'spambot1!~x@host.one')
@@ -1013,7 +1045,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.command('bans')
         out1 = self.drain(self.irc1)
         lines = self.notices(out1, 'alice')
-        self.assertTrue(any(l.startswith('#1 *!*@bob.example on testnet2 (permanent), by alice@testnet1') and
+        self.assertTrue(any(l.startswith('#1 *!*bob@bob.example on testnet2 (permanent), by alice@testnet1') and
                             l.endswith('spam links') for l in lines), out1)
         self.command('unban 1')
         self.drain(self.irc1)
@@ -1030,7 +1062,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
             saved = json.load(f)
         ban = saved['bans']['1']
         self.assertEqual((ban['mask'], ban['reason'], ban['setter']['hostmask']),
-                         ('*!*@bob.example', 'spam', 'alice!~alice@op.testnet1'))
+                         ('*!*bob@bob.example', 'spam', 'alice!~alice@op.testnet1'))
 
 
 # vim:set shiftwidth=4 tabstop=4 expandtab textwidth=79:

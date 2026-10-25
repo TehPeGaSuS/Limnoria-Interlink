@@ -141,9 +141,11 @@ conf.registerChannelValue(Interlink.events, 'relaySelfMessages',
 
 conf.registerGroup(Interlink, 'moderation')
 conf.registerChannelValue(Interlink.moderation, 'banmask',
-    registry.String('*!*@$host', _("""Determines the ban mask used when a nick is banned with
+    registry.String('*!*$ident@$host', _("""Determines the ban mask used when a nick is banned with
         the ban and tban commands. $nick, $ident, $host and $account are replaced with the
-        target's details. This is read for the channel and network the ban is set on.""")))
+        target's details; $ident has no leading ~, so "*$ident" matches with or without one.
+        It can be set globally, per network and per channel, and is read for the channel and
+        network the ban is set on.""")))
 conf.registerChannelValue(Interlink.moderation, 'maxMatches',
     registry.PositiveInteger(1, _("""Determines how many users in the target channel a ban
         may match. Bans matching more are refused as too broad, unless --force is given.""")))
