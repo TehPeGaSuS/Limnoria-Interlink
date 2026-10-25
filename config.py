@@ -142,7 +142,7 @@ conf.registerChannelValue(Interlink.events, 'relaySelfMessages',
 conf.registerGroup(Interlink, 'moderation')
 conf.registerChannelValue(Interlink.moderation, 'banmask',
     registry.String('*!*$ident@$host', _("""Determines the ban mask used when a nick is banned with
-        the ban and tban commands. $nick, $ident, $host and $account are replaced with the
+        the netban command. $nick, $ident, $host and $account are replaced with the
         target's details; $ident has no leading ~, so "*$ident" matches with or without one.
         It can be set globally, per network and per channel, and is read for the channel and
         network the ban is set on.""")))
@@ -153,10 +153,7 @@ conf.registerChannelValue(Interlink.moderation, 'liftAfter',
     registry.NonNegativeInteger(3600, _("""Determines after how many seconds the +b of a
         permanent ban is removed from the channel, to keep its ban list short. The ban stays
         in Interlink's database and is set again whenever a matching user joins, until it is
-        removed with the unban command. 0 keeps the +b set.""")))
-conf.registerChannelValue(Interlink.moderation, 'tbanDuration',
-    registry.PositiveInteger(3600, _("""Determines how long, in seconds, a tban lasts when no
-        duration is given.""")))
+        removed with the netunban command. 0 keeps the +b set.""")))
 conf.registerChannelValue(Interlink.moderation, 'announce',
     registry.Boolean(True, _("""Determines whether bans, kicks and unbans are announced in
         every channel of the relay.""")))

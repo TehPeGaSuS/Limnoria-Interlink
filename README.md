@@ -68,20 +68,23 @@ Networks stay independent: modes, ops and bans are never synced between them. In
 
 | Command | What it does |
 |---|---|
-| `ban [--force] <network> <nick\|mask> [<reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*$ident@$host` by default) or the mask on that network, and kicks the matching users |
-| `ban --global [--force] <mask> [<reason>]` | Bans the mask on every network of the relay (see below) |
-| `tban [--global] [--force] ... [<duration>] [<reason>]` | Like `ban`, but lifted after the duration (`30m`, `2h`, `1d`, `1h30m`...; `moderation.tbanDuration`, 1h, by default) and never set again |
-| `kick <network> <nick> [<reason>]` | Kicks the nick |
-| `unban <id>`, `unban <network> <nick\|mask>` or `unban --global <mask>` | Removes a ban and its +b |
-| `bans [<network>]` | Lists the relay's active bans |
-| `baninfo <id\|mask>` | Shows a ban's details, including removed ones |
+| `netban [--force] [--duration <duration>] <network> <nick\|mask> [--reason <reason>]` | Bans the nick (using the `moderation.banmask` setting, `*!*$ident@$host` by default) or the mask on that network, and kicks the matching users |
+| `netban --global [--force] [--duration <duration>] <mask> [--reason <reason>]` | Bans the mask on every network of the relay (see below) |
+| `netkick <network> <nick> [--reason <reason>]` | Kicks the nick |
+| `netunban <id>`, `netunban <network> <nick\|mask>` or `netunban --global <mask>` | Removes a ban and its +b |
+| `netbans [<network>]` | Lists the relay's active bans |
+| `netbaninfo <id\|mask>` | Shows a ban's details, including removed ones |
 
-For example, from `#chat` on Libera: `!ban oftc spammer advertising`.
+For example, from `#chat` on Libera: `!netban oftc spammer --reason advertising`, or `!netban oftc spammer --duration 2h --reason advertising`.
 
+- Options can go in any order. The network and target can also be given as options, which also says what the target is instead of Interlink guessing from `*`, `!` or `@`: `--net` (or `--network`), `--nick` or `--mask`, and `--id` for `netunban` and `netbaninfo`. E.g. `!netban --nick spammer --net oftc --duration 2h --reason advertising`.
+- `--reason` takes the rest of the line, so it always comes last and needs no quotes: `--reason used --force because of a bot wave` keeps `--force` as text. If it isn't last, the options after it become part of the reason, and the command is refused because they're missing.
+- Words that aren't an option, the network or the target are refused instead of being guessed at, and so is giving the same thing twice (e.g. a network word and `--net`).
+- **Durations** (`--duration`): `30m`, `2h`, `1d`, `1w`, or combined like `1h30m`. Without one, the ban is permanent.
 - `<network>` is the network's name in Limnoria. Bans are per network: a nick ban uses that user's host on that network, and cloaks or vhosts don't match anywhere else.
-- **Global bans** (`--global`) are for patterns that are the same on every network: nicks and idents, which users choose themselves (e.g. `ban --global spambot*!*@*` or `ban --global *!*spam@*` against a bot wave). A global mask must have `*` as its host part; host bans always name their network.
-- **Permanent bans** (`ban`): the +b is removed after an hour (`moderation.liftAfter`) to keep the channel's ban list short, but the ban stays in Interlink. Whenever a matching user joins, changes nick or changes host, the +b is set again and they are kicked with the original reason, until the ban is removed with `unban`.
-- **If a network's op removes one of these bans** with `-b`, Interlink respects it: it doesn't set it back right away. For a permanent ban, that op is told that the ban is still on the bot and how to delete it (`unban <id>`); it's set again when a matching user joins. A `tban` removed by hand is closed.
+- **Global bans** (`--global`) are for patterns that are the same on every network: nicks and idents, which users choose themselves (e.g. `netban --global spambot*!*@*` or `netban --global *!*spam@*` against a bot wave). A global mask must have `*` as its host part; host bans always name their network.
+- **Permanent bans** (no `--duration`): the +b is removed after an hour (`moderation.liftAfter`) to keep the channel's ban list short, but the ban stays in Interlink. Whenever a matching user joins, changes nick or changes host, the +b is set again and they are kicked with the original reason, until the ban is removed with `netunban`.
+- **If a network's op removes one of these bans** with `-b`, Interlink respects it: it doesn't set it back right away. For a permanent ban, that op is told that the ban is still on the bot and how to delete it (`netunban <id>`); it's set again when a matching user joins. A ban with a duration that is removed by hand is closed.
 - **Too broad**: a ban that would match more than `moderation.maxMatches` users (1 by default) in the target channel is refused, unless `--force` is given. A ban that would match a channel operator is always refused.
 - **Ban mask**: `moderation.banmask` builds the mask for nick bans from `$nick`, `$ident`, `$host` and `$account`. The default `*!*$ident@$host` keeps users who share a host apart (IRCCloud, webchat gateways, shells, bouncer providers), and `$ident` has no leading `~`, so the ban matches whether or not identd answers. Users can change an unconfirmed ident, though; on networks where that matters more than shared hosts, use `*!*@$host`. The setting can be global, per network or per channel, and the most specific one for the channel the ban is set on wins:
   - `config plugins.Interlink.moderation.banmask *!*$ident@$host` (everywhere)
@@ -91,7 +94,7 @@ For example, from `#chat` on Libera: `!ban oftc spammer advertising`.
 - Bans are stored in `data/Interlink-bans.json` with who set them (nick, network and hostmask), when, the reason and the expiry, and who removed them.
 - The bot needs to be a channel operator in the target channel.
 
-Limnoria's Channel plugin also has `ban`, `kick` and `unban` commands. If it's loaded, make Interlink's the default ones (`defaultplugin ban Interlink`, and the same for `kick` and `unban`), or call them as `interlink ban ...`; Channel's stay available as `channel ban ...`.
+The commands are named `net...` so they don't clash with the `ban`, `kick` and `unban` of Limnoria's Channel plugin; both plugins can be loaded.
 
 ## Configuration
 

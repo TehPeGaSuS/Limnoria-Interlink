@@ -816,7 +816,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         return [m.args[1] for m in msgs if m.command == 'NOTICE' and m.args[0] == nick]
 
     def testBanNick(self):
-        self.command('ban testnet2 bob spamming')
+        self.command('netban testnet2 bob --reason spamming')
         out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         kicks = self.find(out2, 'KICK', self.chan2name, 'bob')
@@ -834,29 +834,29 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertIsNone(ban['expires'])
 
     def testOnlyOps(self):
-        self.command('ban testnet2 bob', nick='nobody')
+        self.command('netban testnet2 bob', nick='nobody')
         out1 = self.drain(self.irc1)
         self.assertTrue(any('must be a channel operator' in n for n in self.notices(out1, 'nobody')), out1)
         self.assertFalse(self.find(self.drain(self.irc2), 'KICK'))
 
     def testHalfopsCanUseIt(self):
         self.addUser(self.irc1, self.chan1, '%hal', 'hal!~hal@half.testnet1')
-        self.command('kick testnet2 bob go away', nick='hal')
+        self.command('netkick testnet2 bob --reason go away', nick='hal')
         self.assertTrue(self.find(self.drain(self.irc2), 'KICK', self.chan2name, 'bob'))
 
     def testOpsCannotBeTargeted(self):
         self.addUser(self.irc2, self.chan2, '%halfop2', 'halfop2!~h@half.testnet2')
         for target in ('carol', 'halfop2'):
-            self.command('ban testnet2 %s' % target)
+            self.command('netban testnet2 %s' % target)
             out1 = self.drain(self.irc1)
             self.assertTrue(any('is a channel operator' in n for n in self.notices(out1, 'alice')), out1)
-        self.command('ban testnet2 *!*@op.testnet2')
+        self.command('netban testnet2 *!*@op.testnet2')
         out1 = self.drain(self.irc1)
         self.assertTrue(any('would match channel operators' in n for n in self.notices(out1, 'alice')), out1)
         self.assertFalse(self.find(self.drain(self.irc2), 'MODE'))
 
     def testErrorsArePrivateAndNotRelayed(self):
-        self.command('ban testnet2 nosuchnick')
+        self.command('netban testnet2 nosuchnick')
         out1 = self.drain(self.irc1)
         self.assertTrue(any('nosuchnick is not in' in n for n in self.notices(out1, 'alice')), out1)
         self.assertFalse([m for m in self.drain(self.irc2) if m.command == 'PRIVMSG'])
@@ -864,21 +864,21 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
     def testBotNotOpped(self):
         self.chan2.removeUser(self.irc2.nick)
         self.chan2.addUser(self.irc2.nick)
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         out1 = self.drain(self.irc1)
         self.assertTrue(any("I'm not a channel operator" in n for n in self.notices(out1, 'alice')), out1)
 
     def testTooBroad(self):
         self.addUser(self.irc2, self.chan2, 'bob2', 'bob2!~bob@bob.example')
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         out1 = self.drain(self.irc1)
         self.assertTrue(any('too broad' in n and '--force' in n for n in self.notices(out1, 'alice')), out1)
-        self.command('ban --force testnet2 bob')
+        self.command('netban --force testnet2 bob')
         out2 = self.drain(self.irc2)
         self.assertEqual(len(self.find(out2, 'KICK', self.chan2name)), 2, out2)
 
     def testDefaultMaskMatchesWithOrWithoutTilde(self):
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         # The same user coming back with identd running
@@ -887,7 +887,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
 
     def testSharedHostWithOtherIdentIsNotTooBroad(self):
         self.addUser(self.irc2, self.chan2, 'erin', 'erin!~erin@bob.example')
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
         self.assertEqual(len(self.find(out2, 'KICK', self.chan2name)), 1, out2)
@@ -898,24 +898,24 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
 
     def testBanmaskPerNetwork(self):
         with self.banmask('testnet2').context('*!*@$host'):
-            self.command('ban testnet2 bob')
+            self.command('netban testnet2 bob')
             out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*@bob.example'), out2)
 
     def testBanmaskPerChannelBeatsNetwork(self):
         with self.banmask('testnet2').context('*!*@$host'), \
                 self.banmask('testnet2', self.chan2name).context('$nick!*@*'):
-            self.command('ban testnet2 bob')
+            self.command('netban testnet2 bob')
             out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', 'bob!*@*'), out2)
 
     def testTban(self):
-        self.command('tban testnet2 bob')
+        self.command('netban --duration 1h testnet2 bob')
         self.drain(self.irc2)
         ban = self.plugin.bandb['bans']['1']
         self.assertAlmostEqual(ban['expires'] - ban['time'], 3600, delta=2)
         self.addUser(self.irc2, self.chan2, 'dave', 'dave!~dave@dave.example')
-        self.command('tban testnet2 dave 30m flooding again')
+        self.command('netban testnet2 dave --duration 30m --reason flooding again')
         out1 = self.drain(self.irc1)
         ban = self.plugin.bandb['bans']['2']
         self.assertAlmostEqual(ban['expires'] - ban['time'], 1800, delta=2)
@@ -923,7 +923,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertTrue(any('for 30m: flooding again' in m.args[1] for m in out1 if m.command == 'PRIVMSG'), out1)
 
     def testTbanExpires(self):
-        self.command('tban testnet2 bob 1s')
+        self.command('netban testnet2 bob --duration 1s')
         out2 = self.drain(self.irc2, 3)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         self.assertFalse(self.plugin.bandb['bans']['1']['active'])
@@ -933,7 +933,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
 
     def testPermanentBanIsLiftedAndSetAgain(self):
         with conf.supybot.plugins.interlink.moderation.liftAfter.context(1):
-            self.command('ban testnet2 bob')
+            self.command('netban testnet2 bob')
             out2 = self.drain(self.irc2, 3)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         ban = self.plugin.bandb['bans']['1']
@@ -949,12 +949,12 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertTrue(any('matched ban #1' in m.args[1] for m in out1 if m.command == 'PRIVMSG'), out1)
 
     def testManualUnbanOfPermanentBan(self):
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         self.drain(self.irc2)
         self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*bob@bob.example', prefix='carol!~carol@op.testnet2'))
         out2 = self.drain(self.irc2)
         notes = self.notices(out2, 'carol')
-        self.assertTrue(any('You removed *!*bob@bob.example on %s' % self.chan2name in n and 'unban 1' in n
+        self.assertTrue(any('You removed *!*bob@bob.example on %s' % self.chan2name in n and 'netunban 1' in n
                             for n in notes), out2)
         self.assertFalse(self.find(out2, 'MODE', self.chan2name, '+b'))  # not put back right away
         self.assertTrue(self.plugin.bandb['bans']['1']['active'])
@@ -966,7 +966,7 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertTrue(self.find(out2, 'KICK', self.chan2name, 'bob'), out2)
 
     def testManualUnbanOfTban(self):
-        self.command('tban testnet2 bob')
+        self.command('netban --duration 1h testnet2 bob')
         self.drain(self.irc2)
         self.irc2.feedMsg(ircmsgs.unban(self.chan2name, '*!*bob@bob.example', prefix='carol!~carol@op.testnet2'))
         self.drain(self.irc2)
@@ -975,9 +975,9 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertEqual(ban['removed_by'], 'carol@testnet2 (-b)')
 
     def testUnban(self):
-        self.command('ban testnet2 bob')
+        self.command('netban testnet2 bob')
         self.drain(self.irc2)
-        self.command('unban 1')
+        self.command('netunban 1')
         out2 = self.drain(self.irc2)
         self.assertTrue(self.find(out2, 'MODE', self.chan2name, '-b', '*!*bob@bob.example'), out2)
         out1 = self.drain(self.irc1)
@@ -987,15 +987,15 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         self.assertFalse(self.find(self.drain(self.irc2), 'KICK'))
         # unban by network and nick
         self.addUser(self.irc2, self.chan2, 'dave', 'dave!~dave@dave.example')
-        self.command('ban testnet2 dave')
+        self.command('netban testnet2 dave')
         self.drain(self.irc2)
-        self.command('unban testnet2 dave')
+        self.command('netunban testnet2 dave')
         self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', '*!*dave@dave.example'))
 
     def testGlobalBan(self):
         self.addUser(self.irc1, self.chan1, 'spambot1', 'spambot1!~x@host.one')
         self.addUser(self.irc2, self.chan2, 'spambot2', 'spambot2!~y@host.two')
-        self.command('ban --global spambot*!*@*')
+        self.command('netban --global spambot*!*@*')
         out1 = self.drain(self.irc1)
         out2 = self.drain(self.irc2)
         for out, chan, nick in ((out1, self.chan1name, 'spambot1'), (out2, self.chan2name, 'spambot2')):
@@ -1006,57 +1006,120 @@ class InterlinkModerationTestCase(InterlinkTwoNetworks):
         # Enforced on every network
         self.irc1.feedMsg(ircmsgs.join(self.chan1name, prefix='spambot3!~z@elsewhere'))
         self.assertTrue(self.find(self.drain(self.irc1), 'KICK', self.chan1name, 'spambot3'))
-        self.command('unban --global spambot*!*@*')
+        self.command('netunban --global spambot*!*@*')
         self.assertTrue(self.find(self.drain(self.irc2), 'MODE', self.chan2name, '-b', 'spambot*!*@*'))
 
     def testGlobalBanNeedsHostIndependentMask(self):
-        self.command('ban --global *!*@evil.example')
+        self.command('netban --global *!*@evil.example')
         out1 = self.drain(self.irc1)
         self.assertTrue(any("only matches one network's hosts" in n for n in self.notices(out1, 'alice')), out1)
-        self.command('ban --global bob')
+        self.command('netban --global bob')
         self.assertTrue(any('only works with masks' in n for n in self.notices(self.drain(self.irc1), 'alice')))
-        self.command('ban * spambot*!*@*')
+        self.command('netban * spambot*!*@*')
         self.assertTrue(any('Use --global' in n for n in self.notices(self.drain(self.irc1), 'alice')))
         self.assertFalse(self.find(self.drain(self.irc2), 'MODE'))
 
     def testGlobalTban(self):
-        self.command('tban --global *!*spam@* 2h bot wave')
+        self.command('netban --global *!*spam@* --duration 2h --reason bot wave')
         self.drain(self.irc2)
         ban = self.plugin.bandb['bans']['1']
         self.assertEqual((ban['network'], ban['mask'], ban['reason']), ('*', '*!*spam@*', 'bot wave'))
         self.assertAlmostEqual(ban['expires'] - ban['time'], 7200, delta=2)
 
     def testNickChangeIntoBan(self):
-        self.command('ban testnet2 nastynick!*@*')
+        self.command('netban testnet2 nastynick!*@*')
         self.drain(self.irc2)
         self.irc2.feedMsg(ircmsgs.IrcMsg(prefix='bob!~bob@bob.example', command='NICK', args=('nastynick',)))
         self.assertTrue(self.find(self.drain(self.irc2), 'KICK', self.chan2name, 'nastynick'))
 
     def testKick(self):
-        self.command('kick testnet2 bob calm down')
+        self.command('netkick testnet2 bob --reason calm down')
         out2 = self.drain(self.irc2)
         kicks = self.find(out2, 'KICK', self.chan2name, 'bob')
         self.assertTrue(kicks and kicks[0].args[2] == 'Kicked by alice@testnet1: calm down', out2)
         self.assertFalse(self.find(out2, 'MODE'))
 
-    def testBansAndBaninfo(self):
-        self.command('ban testnet2 bob spam links')
+    def testOptionsGoAnywhere(self):
+        self.command('netban testnet2 --duration 2h bob --force --reason spam --force in the reason')
         self.drain(self.irc2)
-        self.command('bans')
+        ban = self.plugin.bandb['bans']['1']
+        self.assertAlmostEqual(ban['expires'] - ban['time'], 7200, delta=2)
+        self.assertEqual(ban['reason'], 'spam --force in the reason')
+
+    def assertRefused(self, command, text):
+        self.command(command)
+        out1 = self.drain(self.irc1)
+        self.assertTrue(any(text in n for n in self.notices(out1, 'alice')), out1)
+        self.assertNotIn('1', self.plugin.bandb['bans'])
+
+    def testReasonNeedsTheOption(self):
+        self.assertRefused('netban testnet2 bob spamming', 'put the reason after --reason')
+
+    def testBadOptions(self):
+        self.assertRefused('netban testnet2 bob --until 2h', 'Unknown option --until')
+        self.assertRefused('netban testnet2 bob --duration soon', 'soon is not a duration')
+        self.assertRefused('netban testnet2 bob --duration', '--duration needs a value')
+        self.assertRefused('netban testnet2 bob --reason', 'Give the reason after --reason')
+        self.assertRefused('netban testnet2', 'Give the nick or mask.')
+
+    def testNamedOptions(self):
+        self.command('netban --nick bob --network testnet2 --duration 1h --reason spam')
+        out2 = self.drain(self.irc2)
+        self.assertTrue(self.find(out2, 'MODE', self.chan2name, '+b', '*!*bob@bob.example'), out2)
+        self.assertEqual(self.plugin.bandb['bans']['1']['reason'], 'spam')
+        self.command('netbaninfo --id 1')
+        self.assertTrue(any(n.startswith('#1 ') for n in self.notices(self.drain(self.irc1), 'alice')))
+        self.command('netunban --id 1')
+        self.drain(self.irc2)
+        self.assertFalse(self.plugin.bandb['bans']['1']['active'])
+
+    def testNamedMaskAndNet(self):
+        self.command('netban --mask *!*@evil.example --net testnet2')
+        self.drain(self.irc2)
+        self.assertEqual(self.plugin.bandb['bans']['1']['mask'], '*!*@evil.example')
+        self.command('netunban --net testnet2 --mask *!*@evil.example')
+        self.drain(self.irc2)
+        self.assertFalse(self.plugin.bandb['bans']['1']['active'])
+
+    def testNamedKick(self):
+        self.command('netkick --nick bob --reason calm down --net testnet2')
+        out2 = self.drain(self.irc2)
+        # --reason took the rest, so the network is missing
+        self.assertFalse(self.find(out2, 'KICK'), out2)
+        self.command('netkick --nick bob --net testnet2 --reason calm down')
+        self.assertTrue(self.find(self.drain(self.irc2), 'KICK', self.chan2name, 'bob'))
+
+    def testNamedOptionErrors(self):
+        self.assertRefused('netban --net testnet2 --nick *!*@bob.example', 'use --mask for masks')
+        self.assertRefused('netban --net testnet2 --nick bob --mask *!*@x', "--nick and --mask don't go together")
+        self.assertRefused('netban --global --net testnet2 --mask a*!*@*', "--global and --net don't go together")
+        self.assertRefused('netban testnet2 bob --net testnet2', "I didn't expect 'bob'")
+        # A --reason that isn't last swallows the rest
+        self.assertRefused('netban --reason spam --net testnet2 --nick bob', 'Give the network')
+
+    def testOldCommandsAreGone(self):
+        self.command('tban testnet2 bob')
+        self.assertFalse(self.find(self.drain(self.irc2), 'MODE'))
+        self.assertNotIn('1', self.plugin.bandb['bans'])
+
+    def testBansAndBaninfo(self):
+        self.command('netban testnet2 bob --reason spam links')
+        self.drain(self.irc2)
+        self.command('netbans')
         out1 = self.drain(self.irc1)
         lines = self.notices(out1, 'alice')
         self.assertTrue(any(l.startswith('#1 *!*bob@bob.example on testnet2 (permanent), by alice@testnet1') and
                             l.endswith('spam links') for l in lines), out1)
-        self.command('unban 1')
+        self.command('netunban 1')
         self.drain(self.irc1)
-        self.command('baninfo 1')
+        self.command('netbaninfo 1')
         lines = self.notices(self.drain(self.irc1), 'alice')
         self.assertTrue(any('alice!~alice@op.testnet1' in l and 'removed by alice@testnet1' in l for l in lines), lines)
 
     def testBanDatabaseIsSaved(self):
         import json
         from Interlink import plugin as interlink_plugin
-        self.command('tban testnet2 bob 2h spam')
+        self.command('netban --duration 2h testnet2 bob --reason spam')
         self.drain(self.irc2)
         with open(interlink_plugin.bans_filename) as f:
             saved = json.load(f)
