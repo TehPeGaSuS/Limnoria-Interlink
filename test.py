@@ -207,6 +207,100 @@ class InterlinkTestCase(InterlinkTwoNetworks):
         self.assertGreater(len(lines), 1, lines)
         self.assertEqual(''.join(l[len('\x02[testnet1]\x02 <longtalker> '):] for l in lines), word)
 
+    def drain(self, irc):
+        lines = []
+        while True:
+            output = self.getCommandResponse(irc)
+            if output is None:
+                return lines
+            lines.append(output)
+
+    def channelValue(self, name, network, channel):
+        value = conf.supybot.plugins.interlink
+        for part in name.split('.'):
+            value = value.get(part)
+        return value.getSpecific(network=network, channel=channel, fallback_to_channel=False)
+
+    ### Formats
+    def testCustomFormat(self):
+        with conf.supybot.plugins.interlink.format.prefix.context('[$network] '), \
+                conf.supybot.plugins.interlink.format.privmsg.context('$nick: $text (in $channel)'):
+            # Variables inside the relayed text are left alone
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'hello $nick $channel', prefix='abc!def@ghi.jkl'))
+            output = self.getCommandResponse(self.irc2)
+            self.assertEqual('[testnet1] abc: hello $nick $channel (in %s)' % self.chan1name, output.args[1])
+
+    def testCustomFormatWithoutText(self):
+        with conf.supybot.plugins.interlink.format.privmsg.context('<$nick> said something'):
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'secret', prefix='abc!def@ghi.jkl'))
+            output = self.getCommandResponse(self.irc2)
+            self.assertEqual('\x02[testnet1]\x02 <abc> said something', output.args[1])
+
+    def testSplitKeepsTextAfterTheMessage(self):
+        words = ['word%03d' % n for n in range(150)]
+        with conf.supybot.plugins.interlink.format.privmsg.context('<$nick> $text [$network]'):
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, ' '.join(words), prefix='longtalker!~lt@talk.example'))
+            lines = [m.args[1] for m in self.drain(self.irc2)]
+        self.assertGreater(len(lines), 1, lines)
+        head, tail = '\x02[testnet1]\x02 <longtalker> ', ' [testnet1]'
+        for line in lines:
+            self.assertTrue(line.startswith(head) and line.endswith(tail), line)
+        # Words are never cut
+        rebuilt = [line[len(head):-len(tail)].split(' ') for line in lines]
+        self.assertEqual(sum(rebuilt, []), words)
+
+    ### Directions
+    def testSendOnlyChannel(self):
+        with self.channelValue('direction', 'testnet2', self.chan2name).context('send'):
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'not shown', prefix='abc!def@ghi.jkl'))
+            self.assertIsNone(self.getCommandResponse(self.irc2))
+            self.irc2.feedMsg(ircmsgs.privmsg(self.chan2name, 'shown', prefix='abc!def@ghi.jkl'))
+            output = self.getCommandResponse(self.irc1)
+            self.assertEqual('\x02[testnet2]\x02 <abc> shown', output.args[1])
+
+    def testReceiveOnlyChannel(self):
+        with self.channelValue('direction', 'testnet2', self.chan2name).context('receive'):
+            self.irc2.feedMsg(ircmsgs.privmsg(self.chan2name, 'not shown', prefix='abc!def@ghi.jkl'))
+            self.assertIsNone(self.getCommandResponse(self.irc1))
+            self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'shown', prefix='abc!def@ghi.jkl'))
+            output = self.getCommandResponse(self.irc2)
+            self.assertEqual('\x02[testnet1]\x02 <abc> shown', output.args[1])
+
+    ### Topic sync
+    def testTopicSync(self):
+        with conf.supybot.plugins.interlink.topicSync.context(True):
+            self.irc1.feedMsg(ircmsgs.topic(self.chan1name, 'New topic', prefix='user5!~test@user/test'))
+            output = self.getCommandResponse(self.irc2)
+            self.assertEqual(('TOPIC', (self.chan2name, 'New topic')), (output.command, output.args))
+            # Services putting their own topic back is not copied back
+            self.irc2.feedMsg(ircmsgs.topic(self.chan2name, 'Locked topic', prefix='ChanServ!services@services.example'))
+            self.assertIsNone(self.getCommandResponse(self.irc1))
+
+    def testTopicSyncNeedsBothChannels(self):
+        with self.channelValue('topicSync', 'testnet1', self.chan1name).context(True):
+            self.irc1.feedMsg(ircmsgs.topic(self.chan1name, 'New topic', prefix='user5!~test@user/test'))
+            self.assertIsNone(self.getCommandResponse(self.irc2))
+
+    def testTopicSyncSkipsSameTopic(self):
+        self.chan2.topic = 'Same topic'
+        with conf.supybot.plugins.interlink.topicSync.context(True):
+            self.irc1.feedMsg(ircmsgs.topic(self.chan1name, 'Same topic', prefix='user5!~test@user/test'))
+            self.assertIsNone(self.getCommandResponse(self.irc2))
+
+    ### Relay index
+    def testChannelInTwoRelaysIsRelayedOnce(self):
+        self._createChannel(self.irc2, '#third')
+        self.assertNotError("interlink add otherRelay %s@testnet1 %s@testnet2 #third@testnet2"
+                            % (self.chan1name, self.chan2name))
+        self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'hello', prefix='abc!def@ghi.jkl'))
+        targets = sorted(m.args[0] for m in self.drain(self.irc2))
+        self.assertEqual(targets, sorted([self.chan2name, '#third']))
+
+    def testRemovedRelayStopsRelaying(self):
+        self.assertNotError("interlink remove testRelay")
+        self.irc1.feedMsg(ircmsgs.privmsg(self.chan1name, 'hello', prefix='abc!def@ghi.jkl'))
+        self.assertIsNone(self.getCommandResponse(self.irc2))
+
     def testPrivmsgAction(self):
         msg = ircmsgs.privmsg(self.chan2name, "\x01ACTION waves hello\x01", prefix='jlu5!~jlu5@user/jlu5')
         self.irc2.feedMsg(msg)  # irc2 is source

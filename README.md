@@ -105,7 +105,21 @@ Interlink supports relaying the following non-PRIVMSG events: joins, kicks, mode
 - `config plugins.Interlink.events.relayquits`: `True`
 - `config plugins.Interlink.events.relaytopics`: `False`
 
-Note: Topic relaying will only show topic *changes* in a channel. **It does not yet sync topics between channels!**
+Note: Topic relaying only shows topic *changes* in a channel. To copy the topic itself, see topic syncing below.
+
+### One-way relays
+
+`plugins.Interlink.direction` sets which way messages flow for a channel (per network and channel):
+
+- `both` (default)
+- `send`: messages from this channel are relayed, but nothing is relayed into it.
+- `receive`: relayed messages are shown here, but nothing from here is relayed.
+
+For example, to only forward `#news` on one network into the rest of the relay: `config channel #news plugins.Interlink.direction send`. Moderation commands and their announcements are not affected.
+
+### Topic syncing
+
+With `plugins.Interlink.topicSync` on, topic changes are copied to the other channels of the relay. It is off by default, and a topic is only copied between two channels that both have it on (and whose direction allows it). The bot needs permission to set the topic on the target. If the target's services put their own topic back (a topic lock), that topic isn't copied back, so two locked channels never fight.
 
 ### Ignoring users
 Interlink uses Supybot's built in ignore system. However, you can set which messages you want to ignore (from ignored users) using `config plugins.Interlink.events.userignored`. This is NOT a list of users to ignore, which is defined with Limnoria's global ignore system (eg. with the command `admin ignore add *!*@spammer.example`).
@@ -132,6 +146,35 @@ The following options allow you to fine tune Interlink's flood prevention:
 * `plugins.Interlink.antiflood.timeout`: determines the amount of seconds the bot will wait before flood prevention expires (messages are relayed as normal again).
 
 The defaults (10 messages, or 10 of each other event, in 2 seconds; then a 60 second pause) only stop real floods and netsplit storms. Without flood prevention, nothing is ever dropped: messages too long for one IRC line are relayed in full, split into several lines that each repeat the network and sender.
+
+### Formats
+
+Each relayed event has a format under `plugins.Interlink.format`, and `plugins.Interlink.format.prefix` is put in front of all of them. The defaults keep RelayNext's look:
+
+| Setting | Default |
+|---|---|
+| `prefix` | `\x02[$network]\x02 ` (bold) |
+| `privmsg` | `<$nick> $text` |
+| `action` | `* $nick $text` |
+| `join` | `$nick$userhost has joined $channel` |
+| `part` | `$nick$userhost has left $channel$reason` |
+| `quit` | `$nick has quit ($text)` |
+| `nick` | `$nick is now known as $newnick` |
+| `mode` | `$nick$userhost set mode $modes on $channel` |
+| `topic` | `$nick set topic on $channel to: $text` |
+| `kick` | `$target ($targethost) has been kicked from $channel by $nick ($text)` |
+| `announcement` | `*** $text` |
+
+Limnoria's standard substitutions work (`$network`, `$channel`, `$nick`, `$botnick`, `$today`...), plus:
+
+- `$text`: the message, quit message, topic or kick reason
+- `$userhost`: ` (ident@host)`, or nothing when `hostmasks` is off
+- `$reason`: ` (part message)`, or nothing
+- `$newnick`, `$modes`, `$target` and `$targethost` (the kicked user)
+
+The source channel's formats are used. A line too long for IRC is split only inside `$text`, at spaces, so what comes before and after it is repeated on every line. A single word longer than a whole line is the only thing ever cut.
+
+For control characters, quote the value: `config plugins.Interlink.format.prefix "\x02[$network]\x02 "`.
 
 ### Miscellaneous formatting options
 

@@ -112,9 +112,12 @@ class Interlink(callbacks.Plugin):
         # This part facilitates flood protection
         self.msgcounters = {}
         self.floodTriggered = {}
+        # (network, channel): when the bot last set a synced topic there
+        self.pushedTopics = {}
 
         self.db = {}
         self.loadDB()
+        self._rebuildIndex()
 
         # Add our database exporter to world.flushers, so it's automatically
         # ran on every flush cycle.
@@ -160,14 +163,17 @@ class Interlink(callbacks.Plugin):
 
     def _format(self, irc, msg, channel, isAnnouncement=False):
         """
-        Formats a relay given the IRC object, msg object, and channel.
+        Formats a relay given the IRC object, msg object, and channel, using the channel's
+        format settings. Returns (head, text, tail) with the free text ($text) kept apart, so a
+        long line is only ever split inside it; None if the event isn't relayed.
         """
-        s = ''
+        def value(name):
+            return self.registryValue(name, channel=channel, network=irc.network)
+
         nick = real_nick = msg.nick
         userhost = ''
-        noHighlight = self.registryValue('noHighlight', channel=channel, network=irc.network)
-        useHostmask = self.registryValue('hostmasks', channel=channel, network=irc.network)
-        color = self.registryValue('color', channel=channel, network=irc.network)
+        noHighlight = value('noHighlight')
+        color = value('color')
         netname = irc.network
 
         # Adding a zero-width space to prevent being highlighted by clients
@@ -180,100 +186,108 @@ class Interlink(callbacks.Plugin):
 
         # Skip hostmask checking if the sender is a server
         # (i.e. a '.' is present in their name)
-        if useHostmask and '.' not in nick:
+        if value('hostmasks') and '.' not in nick:
             try:
                 userhost = ' (%s)' % msg.prefix.split('!', 1)[1]
             except IndexError:
                 pass
 
+        env = {'nick': nick, 'channel': channel, 'network': netname, 'userhost': userhost,
+               'reason': '', 'newnick': '', 'modes': '', 'target': '', 'targethost': ''}
+        text = ''
+        ignoreRegexp = value("ignoreRegexp")
         if isAnnouncement:
-            # Announcements use a special syntax
-            s = '*** %s' % msg.args[1]
+            kind = 'announcement'
+            text = msg.args[1]
+        elif msg.command == 'NICK':
+            kind = 'nick'
+            newnick = msg.args[0]
+            if noHighlight:
+                newnick = self.blockHighlights(newnick)
+            if color:
+                newnick = self.simpleHash(newnick, hash_using=msg.args[0])
+            env['newnick'] = newnick
+
+        elif msg.command == 'PRIVMSG':
+            text = msg.args[1]
+
+            # Show status prefixes (@%+) in front of the nick if enabled,
+            # but only the highest prefix.
+            if value("showPrefixes"):
+                chobj = irc.state.channels[channel]
+                if chobj.isOp(real_nick):
+                    env['nick'] = '@' + nick
+                elif chobj.isHalfop(real_nick):
+                    env['nick'] = '%' + nick
+                elif chobj.isVoice(real_nick):
+                    env['nick'] = '+' + nick
+
+            if ignoreRegexp and ignoreRegexp.search(text, re.IGNORECASE):
+                self.log.debug("Interlink: filtering message %r from ignoreRegexp %s", text, ignoreRegexp)
+                return
+
+            # Check for CTCP ACTION and format those properly.
+            if re.match('^\x01ACTION .*\x01$', text):
+                kind = 'action'
+                text = text[8:-1]
+            elif text.startswith('\x01'):
+                # Other CTCP messages should just be ignored
+                return
+            else:
+                kind = 'privmsg'
+
+        elif msg.command == 'JOIN':
+            kind = 'join'
+
+        elif msg.command == 'PART':
+            kind = 'part'
+            # Part message isn't a required field and can be empty
+            partmsg = msg.args[1] if len(msg.args) > 1 else ''
+            if ignoreRegexp and ignoreRegexp.search(partmsg, re.IGNORECASE):
+                self.log.debug("Interlink: filtering part message %r from ignoreRegexp %s", partmsg, ignoreRegexp)
+                partmsg = ''
+            if partmsg:
+                env['reason'] = ' (%s)' % partmsg
+
+        elif msg.command == 'QUIT':
+            kind = 'quit'
+            text = msg.args[0] if msg.args else ''
+            if ignoreRegexp and ignoreRegexp.search(text, re.IGNORECASE):
+                self.log.debug("Interlink: filtering quit message %r from ignoreRegexp %s", text, ignoreRegexp)
+                text = ''
+
+        elif msg.command == 'MODE':
+            kind = 'mode'
+            env['modes'] = ' '.join(msg.args[1:])
+
+        elif msg.command == 'TOPIC':
+            kind = 'topic'
+            text = msg.args[1]
+
+        elif msg.command == 'KICK':
+            kind = 'kick'
+            kicked = msg.args[1]
+            # Show the host of the kicked user, not the kicker
+            env['targethost'] = irc.state.nickToHostmask(kicked).split('!', 1)[1]
+            if noHighlight:
+                kicked = self.blockHighlights(kicked)
+            if color:
+                kicked = self.simpleHash(kicked, hash_using=msg.args[1])
+            env['target'] = kicked
+            text = msg.args[2] if len(msg.args) > 2 else ''
+
         else:
-            ignoreRegexp = self.registryValue("ignoreRegexp", channel=channel, network=irc.network)
-            if msg.command == 'NICK':
-                newnick = msg.args[0]
-                if noHighlight:
-                    newnick = self.blockHighlights(newnick)
+            return
 
-                if color:
-                    newnick = self.simpleHash(newnick, hash_using=msg.args[0])
-
-                s = '%s is now known as %s' % (nick, newnick)
-
-            elif msg.command == 'PRIVMSG':
-                text = msg.args[1]
-
-                # Show status prefixes (@%+) in front of the nick if enabled,
-                # but only the highest prefix.
-                if self.registryValue("showPrefixes", channel=channel, network=irc.network):
-                    chobj = irc.state.channels[channel]
-                    if chobj.isOp(real_nick):
-                        nick = '@' + nick
-                    elif chobj.isHalfop(real_nick):
-                        nick = '%' + nick
-                    elif chobj.isVoice(real_nick):
-                        nick = '+' + nick
-
-                if ignoreRegexp and ignoreRegexp.search(text, re.IGNORECASE):
-                    self.log.debug("Interlink: filtering message %r from ignoreRegexp %s", text, ignoreRegexp)
-                    return
-
-                # Check for CTCP ACTION and format those properly.
-                if re.match('^\x01ACTION .*\x01$', text):
-                    text = text[8:-1]
-                    s = '* %s %s' % (nick, text)
-                elif text.startswith('\x01'):
-                    # Other CTCP messages should just be ignored
-                    return
-                else:
-                    s = '<%s> %s' % (nick, msg.args[1])
-
-            elif msg.command == 'JOIN':
-                s = '%s%s has joined %s' % (nick, userhost, channel)
-
-            elif msg.command == 'PART':
-                # Part message isn't a required field and can be empty
-                try:
-                    partmsg = ' (%s)' % msg.args[1]
-                except IndexError:
-                    partmsg = ''
-
-                if ignoreRegexp and ignoreRegexp.search(partmsg, re.IGNORECASE):
-                    self.log.debug("Interlink: filtering part message %r from ignoreRegexp %s", partmsg, ignoreRegexp)
-                    partmsg = ''
-
-                s = '%s%s has left %s%s' % (nick, userhost, channel, partmsg)
-
-            elif msg.command == 'QUIT':
-                quitmsg = msg.args[0]
-                if ignoreRegexp and ignoreRegexp.search(quitmsg, re.IGNORECASE):
-                    self.log.debug("Interlink: filtering quit message %r from ignoreRegexp %s", quitmsg, ignoreRegexp)
-                    quitmsg = ''
-
-                s = '%s has quit (%s)' % (nick, quitmsg)
-
-            elif msg.command == 'MODE':
-                modes = ' '.join(msg.args[1:])
-                s = '%s%s set mode %s on %s' % (nick, userhost, modes, channel)
-
-            elif msg.command == 'TOPIC':
-                s = '%s set topic on %s to: %s' % (nick, channel, msg.args[1])
-
-            elif msg.command == 'KICK':
-                kicked = msg.args[1]
-                # Show the host of the kicked user, not the kicker
-                userhost = irc.state.nickToHostmask(kicked).split('!', 1)[1]
-                if noHighlight:
-                    kicked = self.blockHighlights(kicked)
-                if color:
-                    kicked = self.simpleHash(kicked, hash_using=msg.args[1])
-                s = '%s (%s) has been kicked from %s by %s (%s)' % (kicked,
-                    userhost, channel, nick, msg.args[2])
-
-        if s:  # Then, prepend the source network name in bold.
-            s = "\x02[%s]\x02 %s" % (netname, s)
-        return s
+        # $text is substituted with a marker, so the text itself is never read as a template
+        # and the line can be cut around it.
+        env['text'] = '\0'
+        template = value('format.prefix') + value('format.' + kind)
+        line = ircutils.standardSubstitute(irc, msg, template, env)
+        head, marker, tail = line.partition('\0')
+        if not marker:
+            return (line, '', '')
+        return (head, text, tail.replace('\0', text))
 
     def checkAntiFlood(self, irc, msg, source, channel):
         """
@@ -349,79 +363,96 @@ class Interlink(callbacks.Plugin):
         source = "%s@%s" % (channel, irc.network)
         source = source.lower()
 
-        out_s = self._format(irc, msg, channel, isAnnouncement=isAnnouncement)
-        if out_s:
-            for relay in self.db.values():
-                self.log.debug("Interlink (%s): check if %s in %s", irc.network, source, relay)
-                if source in relay:  # If our channel is in a relay
-                    self.log.debug("Interlink: found %s to be in relay %s", source, relay)
+        targets = self._targetsOf(source)
+        if not targets or not self._canSend(irc.network, channel):
+            return
 
-                    # Remove ourselves from the target channels so we don't get duplicated messages
-                    targets = list(relay)
-                    targets.remove(source)
+        formatted = self._format(irc, msg, channel, isAnnouncement=isAnnouncement)
+        if not formatted:
+            return
 
-                    self.log.debug("Interlink: found targets %s for relay %s", targets, relay)
-                    if (not isAnnouncement) and not self.checkAntiFlood(irc, msg, source, channel):
-                        self.log.debug("Interlink: antiflood blocked event %s from %s",
-                                       msg.command, source)
-                        return
+        if (not isAnnouncement) and not self.checkAntiFlood(irc, msg, source, channel):
+            self.log.debug("Interlink: antiflood blocked event %s from %s",
+                           msg.command, source)
+            return
 
-                    for cn in targets:
-                        # Iterate over all the relay targets for this message:
-                        # each target is stored internally as a #channel@netname
-                        # string.
-                        target, net = cn.split("@")
-                        otherIrc = world.getIrc(net)
-                        if otherIrc is None:
-                            self.log.debug("Interlink: message to network %r dropped, we are not "
-                                           "connected there!", net)
-                            continue
+        for target, otherIrc in targets:
+            if not self._canReceive(otherIrc.network, target):
+                continue
+            for line in self._splitLine(otherIrc, target, formatted):
+                out_msg = ircmsgs.privmsg(target, line)
 
-                        target_chanobj = otherIrc.state.channels.get(target)
-                        if (not target_chanobj) or otherIrc.nick not in target_chanobj.users:
-                            # We're not in the target relay channel!
-                            self.log.debug("Interlink: message to %s@%s dropped, we are not in that "
-                                           "channel!", target, net)
-                        else:
-                            for line in self._splitLine(otherIrc, target, out_s):
-                                out_msg = ircmsgs.privmsg(target, line)
+                # Tag the message as relayed so we (and other relayers) don't
+                # try to relay it again.
+                out_msg.tag('relayedMsg')
+                otherIrc.queueMsg(out_msg)
 
-                                # Tag the message as relayed so we (and other relayers) don't
-                                # try to relay it again.
-                                out_msg.tag('relayedMsg')
-                                otherIrc.queueMsg(out_msg)
+    def _rebuildIndex(self):
+        """Maps each #channel@network to the other channels of every relay it is in, so that
+        relaying an event doesn't go through the whole database."""
+        index = {}
+        for relay in self.db.values():
+            for channelpair in relay:
+                index.setdefault(channelpair, set()).update(relay)
+        for channelpair, others in index.items():
+            others.discard(channelpair)
+        self.index = index
 
-    # The part of a relayed line repeated on each piece when it is split: "[net] <nick> ",
-    # "[net] * nick " or just "[net] ".
-    _linePrefix = re.compile(r'^(\x02\[[^\]]*\]\x02 (?:<[^>]*> |\* \S+ )?)')
+    def _targetsOf(self, source):
+        """Returns (channel, irc) for each channel the given #channel@network is relayed to,
+        leaving out networks and channels the bot isn't on."""
+        targets = []
+        for cn in sorted(self.index.get(source, ())):
+            target, net = cn.split("@", 1)
+            otherIrc = world.getIrc(net)
+            if otherIrc is None:
+                self.log.debug("Interlink: message to network %r dropped, we are not "
+                               "connected there!", net)
+                continue
+            target_chanobj = otherIrc.state.channels.get(target)
+            if (not target_chanobj) or otherIrc.nick not in target_chanobj.users:
+                # We're not in the target relay channel!
+                self.log.debug("Interlink: message to %s@%s dropped, we are not in that "
+                               "channel!", target, net)
+                continue
+            targets.append((target, otherIrc))
+        return targets
 
-    def _splitLine(self, irc, target, text):
+    def _canSend(self, network, channel):
+        return self.registryValue('direction', channel=channel, network=network) != 'receive'
+
+    def _canReceive(self, network, channel):
+        return self.registryValue('direction', channel=channel, network=network) != 'send'
+
+    def _splitLine(self, irc, target, formatted):
         """Splits a relayed line into pieces that fit in one IRC message (512 bytes, including
-        the ":nick!user@host PRIVMSG <target> :" that servers add), at spaces where possible.
-        Each piece repeats the network and sender."""
+        the ":nick!user@host PRIVMSG <target> :" that servers add). Only the text is split,
+        and only at spaces: a word is cut only when it is longer than a whole line by itself.
+        Each piece repeats what comes before and after the text ("[net] <nick> ")."""
+        head, text, tail = formatted
         _nick, ident, host = ircutils.splitHostmask(irc.prefix)
         nick = irc.nick  # The prefix's nick can lag behind a nick change
         if host == 'unset.domain':  # We haven't seen our own host yet; assume a long one.
             host = 'x' * 64
         overhead = len((':%s!%s@%s PRIVMSG %s :\r\n' % (nick, ident, host, target)).encode('utf-8'))
         limit = 512 - overhead
-        if len(text.encode('utf-8')) <= limit:
-            return [text]
+        line = head + text + tail
+        if len(line.encode('utf-8')) <= limit:
+            return [line]
+        if not text:  # Nothing to split around; split the whole line instead
+            head, text, tail = '', line, ''
 
-        match = self._linePrefix.match(text)
-        head = match.group(1) if match else ''
-        body = text[len(head):]
-        room = max(limit - len(head.encode('utf-8')), 50)
+        room = max(limit - len((head + tail).encode('utf-8')), 50)
         pieces = []
         current = ''
-        for word in body.split(' '):
+        for word in text.split(' '):
             candidate = word if not current else current + ' ' + word
             if len(candidate.encode('utf-8')) <= room:
                 current = candidate
                 continue
             if current:
                 pieces.append(current)
-            # A single word longer than a line is cut by characters.
+            # A single word longer than a line can't be sent whole; it is cut by characters.
             while len(word.encode('utf-8')) > room:
                 cut = len(word)
                 while len(word[:cut].encode('utf-8')) > room:
@@ -431,7 +462,7 @@ class Interlink(callbacks.Plugin):
             current = word
         if current:
             pieces.append(current)
-        return [head + piece for piece in pieces]
+        return [head + piece + tail for piece in pieces]
 
     def doPrivmsg(self, irc, msg):
         if msg.channel and self._isModerationCommand(irc, msg):
@@ -449,7 +480,32 @@ class Interlink(callbacks.Plugin):
         if self.registryValue("events.relay%ss" % msg.command, channel=msg.channel, network=irc.network):
             self.relay(irc, msg, channel=msg.channel)
 
-    doTopic = doPart = doKick = doNonPrivmsg  # doJoin and doMode also enforce bans (below)
+    doPart = doKick = doNonPrivmsg  # doJoin and doMode also enforce bans (below)
+
+    # After the bot sets a synced topic, topic changes on that channel are not copied back for
+    # this long: the change is our own, or services putting their topic back.
+    topicSyncQuiet = 10
+
+    def doTopic(self, irc, msg):
+        self.doNonPrivmsg(irc, msg)
+        channel = msg.channel.lower()
+        pushed = self.pushedTopics.get((irc.network, channel))
+        if pushed and time.time() - pushed < self.topicSyncQuiet:
+            return
+        if not (self.registryValue('topicSync', channel=channel, network=irc.network)
+                and self._canSend(irc.network, channel)):
+            return
+        topic = msg.args[1]
+        for target, otherIrc in self._targetsOf('%s@%s' % (channel, irc.network.lower())):
+            if not (self.registryValue('topicSync', channel=target, network=otherIrc.network)
+                    and self._canReceive(otherIrc.network, target)):
+                continue
+            if otherIrc.state.channels[target].topic == topic:
+                continue
+            self.pushedTopics[(otherIrc.network, target)] = time.time()
+            out_msg = ircmsgs.topic(target, topic)
+            out_msg.tag('relayedMsg')
+            otherIrc.queueMsg(out_msg)
 
     # NICK and QUIT aren't channel specific, so they require a bit
     # of extra handling
@@ -588,6 +644,7 @@ class Interlink(callbacks.Plugin):
                       "2).", Raise=True)
         self.checkRelays(irc, relays)
         self.db[rid] = relays
+        self._rebuildIndex()
         irc.replySuccess()
     set = wrap(set, ['admin', 'somethingWithoutSpaces',
                      many('somethingWithoutSpaces')])
@@ -615,6 +672,7 @@ class Interlink(callbacks.Plugin):
             self.db[rid] = new_relays = set()
         new_relays.update(relays)
         self.db[rid] = new_relays
+        self._rebuildIndex()
         irc.replySuccess()
     add = wrap(add, ['admin', 'somethingWithoutSpaces',
                      many('somethingWithoutSpaces')])
@@ -631,6 +689,7 @@ class Interlink(callbacks.Plugin):
             irc.error("No such relay '%s' exists." % rid, Raise=True)
         if not relays:
             del self.db[rid]
+            self._rebuildIndex()
             irc.replySuccess()
             return
         relays = list(map(str.lower, relays))
@@ -642,6 +701,7 @@ class Interlink(callbacks.Plugin):
             current_relays.discard(relay)
         if len(current_relays) < 2:
             del self.db[rid]
+        self._rebuildIndex()
         if missing:
             s = format("However, the following channels were not removed "
                        "because they were not found in the original relay: %L",
@@ -668,6 +728,7 @@ class Interlink(callbacks.Plugin):
         Clears all relays defined.
         """
         self.db = {}
+        self._rebuildIndex()
         irc.replySuccess()
     clear = wrap(clear, ['admin'])
 

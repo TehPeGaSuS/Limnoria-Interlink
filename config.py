@@ -66,6 +66,44 @@ conf.registerChannelValue(Interlink, 'ignoreRegexp',
     registry.Regexp(None, _("""If configured, text, part, and quit messages matching this regexp
                             will not be relayed. This may be useful for blocking spam.""")))
 
+class Direction(registry.OnlySomeStrings):
+    validStrings = ('both', 'send', 'receive')
+
+conf.registerChannelValue(Interlink, 'direction',
+    Direction('both', _("""Determines which way messages flow for this channel: "both", "send"
+    (messages from this channel are relayed, nothing is relayed into it) or "receive" (relayed
+    messages are shown here, but nothing from here is relayed). Cross-network moderation
+    commands and their announcements are not affected.""")))
+conf.registerChannelValue(Interlink, 'topicSync',
+    registry.Boolean(False, _("""Determines whether topic changes are copied between relayed
+    channels. A topic is only copied from a channel with topicSync on to another channel that
+    also has it on (and whose direction allows it); the bot needs permission to set the topic
+    there. If the target's services put their own topic back, it is not copied back.""")))
+
+conf.registerGroup(Interlink, 'format')
+_formats = {
+    'prefix': ('\x02[$network]\x02 ', 'put before every relayed line'),
+    'privmsg': ('<$nick> $text', 'used for messages'),
+    'action': ('* $nick $text', 'used for /me actions'),
+    'join': ('$nick$userhost has joined $channel', 'used for joins'),
+    'part': ('$nick$userhost has left $channel$reason', 'used for parts'),
+    'quit': ('$nick has quit ($text)', 'used for quits'),
+    'nick': ('$nick is now known as $newnick', 'used for nick changes'),
+    'mode': ('$nick$userhost set mode $modes on $channel', 'used for mode changes'),
+    'topic': ('$nick set topic on $channel to: $text', 'used for topic changes'),
+    'kick': ('$target ($targethost) has been kicked from $channel by $nick ($text)',
+             'used for kicks'),
+    'announcement': ('*** $text', 'used for the relay\'s own announcements'),
+}
+for _name, (_default, _what) in _formats.items():
+    conf.registerChannelValue(Interlink.format, _name,
+        registry.String(_default, _("""Determines the format %s. Limnoria's standard
+        substitutions work ($network, $channel, $nick, $botnick, $today...), plus $text (the
+        message, quit, topic or kick reason), $userhost (" (ident@host)", or nothing when
+        hostmasks is off), $reason (" (part message)" or nothing), $newnick, $modes, $target
+        and $targethost (the kicked user). The settings of the channel the message comes from
+        are used.""") % _what))
+
 conf.registerGroup(Interlink, 'antiflood')
 conf.registerChannelValue(Interlink.antiflood, 'enable',
     registry.Boolean(False, _("""Determines whether flood prevention should be enabled
